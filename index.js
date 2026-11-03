@@ -408,7 +408,7 @@ export function apply(ctx) {
   register({
     name: 'ui_page',
     description:
-      'Local visual acceptance tool for DSH plugin pages. Works as a session: "begin" opens the target panel and remembers the conversation it came from, "act" performs one step (click / waitFor / audit / snapshot / wait / type) and records it in a timeline, "end" returns that timeline and goes back to the conversation. Use waitFor to observe effects that arrive later, and interleave the plugin\'s own tools between acts to confirm the visual UI reflects them. The session also ends by itself after 30s without an act and puts the page back after a reload. Read-only actions (audit/find/outline/info/errors) never change what the user is looking at; "peek" is the quick open-read-return shortcut.',
+      'Local visual acceptance tool for DSH plugin pages. Works as a session: "begin" opens the target panel and remembers the conversation it came from, "act" performs one step (click / waitFor / audit / snapshot / wait / type / key) and records it in a timeline, "end" returns that timeline and goes back to the conversation. Use waitFor to observe effects that arrive later, and interleave the plugin\'s own tools between acts to confirm the visual UI reflects them. OFF-LIMITS: settings, account, balance, recharge, and the account menu are never automated. Actions there are refused, and a click that opens the settings panel is closed again immediately and reported as a refusal. The session also ends by itself after 30s without an act and puts the page back after a reload. Read-only actions (audit/find/outline/info/errors) never change what the user is looking at; "peek" is the quick open-read-return shortcut.',
     parameters: {
       type: 'object',
       properties: {

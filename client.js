@@ -174,6 +174,43 @@ window.__ModuleLoader__.load({
       return Boolean(document.querySelector('[data-composer-input="true"]'));
     }
 
+    // ---- off-limits areas -------------------------------------------------
+    // Settings, account, balance and recharge are private. Automation must never
+    // act inside them; only this plugin's own settings section is exempt.
+    const SETTINGS_DIALOG = '[data-shortcut-modal="settings"]';
+    const OWN_SECTION = '[data-plugin="dsh-ui-probe-settings"]';
+
+    function settingsOpen() {
+      return Boolean(document.querySelector(SETTINGS_DIALOG));
+    }
+
+    function isOffLimits(element) {
+      if (!element || typeof element.closest !== 'function') return false;
+      if (element.closest(OWN_SECTION)) return false;
+      if (element.closest(SETTINGS_DIALOG)) return true;
+      // The account menu is the gateway to settings/sign-out: refuse it outright so
+      // the settings panel is never opened in the first place.
+      const menu = element.closest('[role="menu"]');
+      if (menu && /退出登录|Sign out/i.test(menu.textContent || '')) return true;
+      return false;
+    }
+
+    function closeSettings() {
+      const dialog = document.querySelector(SETTINGS_DIALOG);
+      if (!dialog) return false;
+      const buttons = Array.from(dialog.querySelectorAll('button'));
+      const closeButton = buttons.find(function (button) {
+        const label = (button.getAttribute('aria-label') || button.textContent || '').trim();
+        return label === '关闭' || label === 'Close' || button.getAttribute('aria-label') === '关闭';
+      });
+      if (closeButton) {
+        clickElement(closeButton, true);
+      } else {
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      }
+      return true;
+    }
+
     // The window title is "<session title> — DeepSeek Harness".
     function sessionTitle() {
       return String(document.title || '').replace(/\s+—\s+DeepSeek Harness\s*$/, '').trim();
@@ -547,6 +584,9 @@ window.__ModuleLoader__.load({
       if (wantsOpen && !opener.length) {
         return { ok: false, error: 'opener not found: ' + (args.openText || args.openSelector || '(none)') };
       }
+      if (opener.length && isOffLimits(opener[0])) {
+        return { ok: false, refused: 'off-limits', error: 'refused: settings, account, balance and recharge are off-limits to automation' };
+      }
       session = {
         origin: sessionTitle(),
         agentId: args.agentSessionId || null,
@@ -590,8 +630,25 @@ window.__ModuleLoader__.load({
       if (a.kind === 'click') {
         const target = resolveTarget(a);
         if (!target.length) return { ok: false, error: 'click target not found' };
+        if (isOffLimits(target[0])) {
+          return { ok: false, refused: 'off-limits', error: 'refused: settings, account, balance and recharge are off-limits to automation' };
+        }
+        const settingsWereOpen = settingsOpen();
         clickElement(target[0], a.clickOnly === true);
         await sleep(a.settleMs || DEFAULT_SETTLE);
+        // Safety net: a click that opens the settings panel is treated as a refusal
+        // and the panel is closed immediately, before anything can be read there.
+        if (!settingsWereOpen && settingsOpen()) {
+          closeSettings();
+          await sleep(200);
+          return {
+            ok: false,
+            refused: 'settings-opened',
+            error: 'refused: this click opened the settings panel; it was closed immediately. Settings/account areas are off-limits.',
+            settingsClosed: !settingsOpen(),
+            snapshot: snapshot(),
+          };
+        }
         return { ok: true, clicked: describe(target[0]), rect: rectOf(target[0]), snapshot: snapshot() };
       }
       if (a.kind === 'waitFor') return await waitForTarget(a);
@@ -608,6 +665,9 @@ window.__ModuleLoader__.load({
       if (a.kind === 'type') {
         const target = resolveTarget(a);
         if (!target.length) return { ok: false, error: 'type target not found' };
+        if (isOffLimits(target[0])) {
+          return { ok: false, refused: 'off-limits', error: 'refused: settings, account, balance and recharge are off-limits to automation' };
+        }
         const result = await typeInto(target[0], a.value, { clear: a.clear !== false, settleMs: a.settleMs });
         return Object.assign({}, result, { snapshot: snapshot() });
       }
@@ -615,6 +675,9 @@ window.__ModuleLoader__.load({
         const target = resolveTarget(a);
         const element = target.length ? target[0] : document.activeElement;
         if (!element) return { ok: false, error: 'no key target: pass text/selector or focus a field first' };
+        if (isOffLimits(element)) {
+          return { ok: false, refused: 'off-limits', error: 'refused: settings, account, balance and recharge are off-limits to automation' };
+        }
         const key = String(a.value || a.key || '');
         if (!key) return { ok: false, error: 'key is required (for example "Enter", "Escape", "Backspace")' };
         pressKey(element, key);
