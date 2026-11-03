@@ -14,7 +14,7 @@
  * No eval: actions are a fixed vocabulary, so the page's CSP stays intact.
  */
 window.__ModuleLoader__.load({
-  id: '@local/ui-probe',
+  id: '@yuexizhishang/dsh-ui-probe',
   factory(require) {
     const RETRY_MS = 2000;
     const MAX_ERRORS = 40;

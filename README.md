@@ -2,31 +2,55 @@
 
 DeepSeek Harness 的**本地可视化插件页面验收工具**：在对话里调用它，切到目标插件页面，按对话决定的内容做验收——读真实 DOM 与计算样式、点按钮、填输入框、等异步效果、抓控制台错误，结束后自动回到原对话。
 
+包名：`@yuexizhishang/dsh-ui-probe`（仓库根即插件包，直接 `install_bundle` 本目录即可）。
+
+## 安装
+
+### 方式一：从 GitHub 安装（推荐）
+
+在 Harness 的「设置 → 插件 → 添加插件」里粘贴：
+
+```text
+github:yuexizhishang/dsh-ui-probe
+```
+
+或完整地址 `https://github.com/yuexizhishang/dsh-ui-probe`。
+
+### 方式二：克隆后从本地安装
+
+```powershell
+git clone https://github.com/yuexizhishang/dsh-ui-probe.git
+```
+
+然后用 `plugin_manager` 的 `install_bundle`，target 指向**克隆下来的仓库根目录**（绝对路径）。
+
+### 方式三：npm（尚未发布）
+
+仓库里 `package.json` 仍是 `"private": true`。要发 npm 需：删掉 `private`、`npm login`、`npm publish --access public`（scoped 包必须显式 public），之后别人可以粘贴 `@yuexizhishang/dsh-ui-probe@1.0.0`。
+
+## 更新与卸载
+
+| 操作 | 做法 | 是否需要重启 |
+|---|---|---|
+| 改 Host（`index.js`） | `plugin_manager set_bundle` 关 → 开 | 否（热重载） |
+| 改 Client（`client.js`） | 页面 `Ctrl+R` | 否 |
+| 卸载 | `remove_bundle`，target = `@yuexizhishang/dsh-ui-probe` | 否 |
+
+**注意**：安装后 profile 里是指向本目录的链接，**移动仓库要先卸载**，移完从新路径重装。
+
 ## 目录
 
 ```
-dsh-ui-probe/
-  bundle/          # 插件本体（可直接 install_bundle 的包）
-    package.json
-    cordis.patch.yml
-    index.js       # Host 半边：工具 + 命名 HTTP 桥
-    client.js      # 页面半边：长轮询、动作执行、时间线
-    locale/
-    icon.svg
+dsh-ui-probe/            ← 仓库根 = npm 包根
+  package.json
+  cordis.patch.yml
+  index.js               Host：工具 + 命名 HTTP 长轮询桥
+  client.js              页面：验收会话 / 动作 / 时间线
+  locale/{zh,en}.json
+  icon.svg
   README.md
-  .gitignore
+  LICENSE
 ```
-
-## 安装与更新
-
-| 操作 | 命令 | 是否需要重启 |
-|---|---|---|
-| 安装 | `plugin_manager install_bundle`，target = 本仓库 `bundle/` 的**绝对路径** | 首次可能 `restart-required`；重装同一包通常直接 `applied` |
-| 改 Host（index.js） | `plugin_manager set_bundle` 关 → 开 | 否（热重载） |
-| 改 Client（client.js） | 页面 `Ctrl+R` | 否 |
-| 卸载 | `plugin_manager remove_bundle`，target = `@local/ui-probe` | 否 |
-
-**注意**：安装后 profile 里是一个指向 `bundle/` 的链接。**不要搬动这个目录**——要移动就先卸载，移完再从新路径重装。
 
 ## 两个工具
 
@@ -58,14 +82,18 @@ end                                          返回时间线 + 快照 + errors�
 
 | 做不到 | 原因 |
 |---|---|
-| 截像素图 | Host 在 Electron 子进程，`BrowserWindow.getAllWindows()` 为空；像素只能外部 Win32 `PrintWindow`（需一次不受权权限，但不抢前台、不受遮挡） |
+| 截像素图 | Host 在 Electron 子进程，`BrowserWindow.getAllWindows()` 为空；像素只能外部 Win32 `PrintWindow`（需一次不受限权限，但不抢前台、不受遮挡） |
 | 面板 A → 面板 B 自动回 A | 页面没有可靠的"当前面板"标记；用显式 `click` 或 `restore-origin` |
 | Canvas/自绘编辑器输入 | 只支持 input/textarea 与标准 contenteditable |
 | 并发调用 | Host 单请求队列，同时只有一个任务 |
 
 ## 实现要点
 
-- 页面用**长轮询**访问 `Host` 的命名 HTTP 路由 `/dsh-ui-probe`；命名路由**不需要认证令牌**（页面同源 `dsh-app://app/`）。
+- 页面用**长轮询**访问 Host 的命名 HTTP 路由 `/dsh-ui-probe`；命名路由**不需要认证令牌**（页面同源 `dsh-app://app/`）。
 - Host 只保留**最新一个**挂起请求，旧页面代际的残留会被释放为 `{id:null}`，避免同一任务被多个页面实例执行。
 - 客户端不用 `eval`，动作是固定词表，避开 CSP。
 - `type` 的 `ok` 来自**回读校验**，写不进去就报 `ok:false` + `note`，不假装成功。
+
+## 许可
+
+MIT，见 [LICENSE](LICENSE)。
