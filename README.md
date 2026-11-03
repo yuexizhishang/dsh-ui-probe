@@ -1,6 +1,6 @@
-# DSH UI 探针
+# DSH 插件测试工具 —— 自动测试插件界面（dsh-ui-probe）
 
-**在真实运行的 DeepSeek Harness 界面里验收插件页面。**
+**在真实运行的 DeepSeek Harness 界面里自动测试插件页面。**
 
 UI 探针让 DeepSeek Harness 在做图形化界面插件时，能够自己把界面切换到目标插件页面、读取信息、验收调试插件功能。
 
