@@ -908,6 +908,7 @@ window.__ModuleLoader__.load({
             upToDate: '已是最新版本',
             outdated: '有可用更新',
             unknown: '无法判断（未能读取远端版本）',
+            remoteFailed: '未能读取远端版本：',
             check: '检查更新',
             update: '更新并安装',
             uninstall: '卸载插件',
@@ -930,6 +931,7 @@ window.__ModuleLoader__.load({
             upToDate: 'Up to date',
             outdated: 'Update available',
             unknown: 'Unknown (could not read the remote version)',
+            remoteFailed: 'Could not read the remote version: ',
             check: 'Check for updates',
             update: 'Update and install',
             uninstall: 'Uninstall plugin',
@@ -1014,8 +1016,19 @@ window.__ModuleLoader__.load({
 
           function applyCheck(result) {
             setCheck(result);
-            setPhase(!result || result.ok === false ? 'error' : result.upToDate ? 'current' : 'outdated');
-            if (result && result.ok === false) setMessage(result.error || t('error'));
+            if (!result || result.ok === false) {
+              setPhase('error');
+              if (result) setMessage(result.error || t('error'));
+              return;
+            }
+            if (!result.remote) {
+              // The commit was readable but its package.json was not: the version
+              // comparison simply has no answer, so do not claim an update exists.
+              setPhase('unknown');
+              setMessage(result.remoteError ? t('remoteFailed') + result.remoteError : t('unknown'));
+              return;
+            }
+            setPhase(result.upToDate ? 'current' : 'outdated');
           }
 
           async function runCheck() {
@@ -1088,9 +1101,11 @@ window.__ModuleLoader__.load({
               ? t('upToDate')
               : phase === 'outdated'
                 ? t('outdated')
-                : phase === 'error'
-                  ? t('error')
-                  : t('noCheck');
+                : phase === 'unknown'
+                  ? t('unknown')
+                  : phase === 'error'
+                    ? t('error')
+                    : t('noCheck');
 
           const localValue = check && check.local ? check.local : '—';
           const remoteValue = check && check.remote ? check.remote : (phase === 'error' ? '—' : t('unknown'));

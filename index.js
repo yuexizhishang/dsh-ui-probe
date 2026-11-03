@@ -273,18 +273,34 @@ export function apply(ctx) {
         hint: '仓库尚未推送或当前网络不可达 GitHub',
       };
     }
+    // Read package.json through the REST API: raw.githubusercontent.com is unreachable
+    // on many networks (and on some it is blocked outright), while api.github.com works.
     try {
-      const response = await fetch(
-        'https://raw.githubusercontent.com/' + GITHUB_REPO + '/' + GITHUB_REF + '/package.json',
-        { headers: { 'user-agent': 'dsh-ui-probe' }, signal: AbortSignal.timeout(15000) },
-      );
-      if (response.ok) {
-        const manifest = JSON.parse(await response.text());
-        info.remote = manifest.version || null;
+      const url =
+        'https://api.github.com/repos/' + GITHUB_REPO + '/contents/package.json' +
+        (info.sha ? '?ref=' + encodeURIComponent(info.sha) : '');
+      const response = await fetch(url, {
+        headers: { 'user-agent': 'dsh-ui-probe', accept: 'application/vnd.github.raw' },
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!response.ok) throw new Error('HTTP ' + response.status + ' from ' + url);
+      const text = await response.text();
+      let manifest = null;
+      try {
+        manifest = JSON.parse(text);
+      } catch (ignored) {
+        manifest = null;
       }
+      // Without the raw media type the API answers with base64 content instead.
+      if (manifest && typeof manifest === 'object' && typeof manifest.content === 'string' && !manifest.version) {
+        manifest = JSON.parse(Buffer.from(manifest.content, 'base64').toString('utf8'));
+      }
+      info.remote = (manifest && manifest.version) || null;
+      if (!info.remote) info.remoteError = '远端 package.json 里没有 version 字段';
     } catch (error) {
       info.remoteError = (error && error.message) || String(error);
     }
+    info.remoteKnown = Boolean(info.remote);
     if (info.remote) info.upToDate = compareVersion(local, info.remote) >= 0;
     return info;
   }
@@ -293,6 +309,15 @@ export function apply(ctx) {
     const manager = pluginManagerService();
     const check = await selfCheck();
     if (!check.ok) return { ok: false, skipped: false, error: check.error, check: check };
+    if (!check.remoteKnown) {
+      return {
+        ok: false,
+        skipped: true,
+        reason: 'remote version unknown',
+        error: '未能读取远端版本，无法判断是否有更新',
+        check: check,
+      };
+    }
     if (check.upToDate) {
       return { ok: true, skipped: true, reason: 'already up to date', check: check };
     }
