@@ -1,4 +1,4 @@
-# DSH 插件测试工具 —— 自动测试插件界面（dsh-ui-probe）
+# DSH 图形界面插件测试工具（dsh-ui-probe）
 
 **在真实运行的 DeepSeek Harness 界面里自动测试插件页面。**
 
