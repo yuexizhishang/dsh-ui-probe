@@ -17,6 +17,10 @@ window.__ModuleLoader__.load({
   id: '@yuexizhishang/dsh-ui-probe',
   factory(require) {
     const RETRY_MS = 2000;
+    const EMPTY_GAP_MS = 800;
+    // One id per page load: the Host retires older ids, so a stale generation (a
+    // reload, or a duplicate HMR instance) cannot race the live one for tasks.
+    const CLIENT_ID = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
     const MAX_ERRORS = 40;
     const IDLE_END_MS = 30000;
     const DEFAULT_SETTLE = 300;
@@ -638,6 +642,7 @@ window.__ModuleLoader__.load({
         let stopped = false;
         let controller = null;
         let retryTimer = 0;
+        const clientId = CLIENT_ID;
 
         function schedule(delay) {
           if (stopped) return;
@@ -714,9 +719,23 @@ window.__ModuleLoader__.load({
           controller = new AbortController();
           let delay = 0;
           try {
-            const response = await fetch('/dsh-ui-probe/poll', { cache: 'no-store', signal: controller.signal });
+            const response = await fetch('/dsh-ui-probe/poll?c=' + encodeURIComponent(clientId), {
+              cache: 'no-store',
+              signal: controller.signal,
+            });
             const pending = await response.json();
-            if (!pending || !pending.id) return;
+            if (pending && pending.retired) {
+              // A newer page generation took the bridge; stop instead of fighting it
+              // for the same task (two loops releasing each other used to livelock).
+              stopped = true;
+              return;
+            }
+            if (!pending || !pending.id) {
+              // No work: leave a gap before holding the next poll, so a bug cannot
+              // turn this loop into a busy one.
+              delay = EMPTY_GAP_MS;
+              return;
+            }
             let payload;
             try {
               const handled = await handle(pending);

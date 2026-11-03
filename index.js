@@ -119,20 +119,28 @@ export function apply(ctx) {
       path: ROUTE_PREFIX,
       async handler(req, res) {
         if (!res || typeof res.writeHead !== 'function') return;
-        const url = typeof req.url === 'string' ? req.url.split('?')[0] : '';
+        const rawUrl = typeof req.url === 'string' ? req.url : '';
+        const url = rawUrl.split('?')[0];
+        const query = new URLSearchParams(rawUrl.includes('?') ? rawUrl.slice(rawUrl.indexOf('?') + 1) : '');
+        const clientId = query.get('c') || '';
 
         if (url.endsWith('/poll')) {
           bridge.polls += 1;
           bridge.lastPollAt = Date.now();
 
-          // Only the newest connection may hold a request. Leftover polls from an
-          // older page generation would otherwise receive the same task as well and
-          // race to answer it, so older holds are released with "no work".
+          // Only the newest connection may hold a request. A poll from a different
+          // client id means an older page generation (a reload, or a duplicate HMR
+          // instance) is still alive: release it and tell it to retire, so it stops
+          // polling instead of racing this one for the same task.
           const stale = bridge.held;
           bridge.held = [];
           for (const old of stale) {
             clearTimeout(old.timer);
-            sendJson(old.res, 200, { id: null });
+            if (clientId && old.clientId && old.clientId !== clientId) {
+              sendJson(old.res, 200, { id: null, retired: true });
+            } else {
+              sendJson(old.res, 200, { id: null });
+            }
           }
 
           if (bridge.pending) {
@@ -142,6 +150,7 @@ export function apply(ctx) {
           bridge.holds += 1;
           const entry = {
             res: res,
+            clientId: clientId,
             timer: setTimeout(function () {
               const index = bridge.held.indexOf(entry);
               if (index >= 0) bridge.held.splice(index, 1);
