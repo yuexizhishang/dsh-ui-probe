@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "UI Probe",
+    "description": "Development diagnostic: checks whether a Host plugin can reach Electron, which decides if window capture and DOM inspection can run inside DSH."
+  }
+}

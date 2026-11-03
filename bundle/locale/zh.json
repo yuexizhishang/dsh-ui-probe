@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "UI 探针",
+    "description": "开发用诊断部件：检查 Host 插件能否访问 Electron，用来决定界面截图与 DOM 检查是否能在 DSH 内部完成。"
+  }
+}

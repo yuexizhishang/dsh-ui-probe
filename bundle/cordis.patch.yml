@@ -1,0 +1,3 @@
+- insert:
+    - id: ui-probe
+      name: '@local/ui-probe'
