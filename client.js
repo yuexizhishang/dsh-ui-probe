@@ -188,11 +188,26 @@ window.__ModuleLoader__.load({
       if (!element || typeof element.closest !== 'function') return false;
       if (element.closest(OWN_SECTION)) return false;
       if (element.closest(SETTINGS_DIALOG)) return true;
-      // The account menu is the gateway to settings/sign-out: refuse it outright so
-      // the settings panel is never opened in the first place.
+      // The account trigger exposes a stable aria-label, so the menu never opens.
+      const labelled = element.closest('[aria-label]');
+      if (labelled && /账号菜单|账号|account menu/i.test(labelled.getAttribute('aria-label') || '')) return true;
+      // The account menu is the gateway to settings/sign-out: refuse it outright.
       const menu = element.closest('[role="menu"]');
       if (menu && /退出登录|Sign out/i.test(menu.textContent || '')) return true;
       return false;
+    }
+
+    function accountMenuOpen() {
+      return Array.from(document.querySelectorAll('[role="menu"]')).some(function (menu) {
+        return /退出登录|Sign out/i.test(menu.textContent || '');
+      });
+    }
+
+    function closeAccountMenu() {
+      document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      return !accountMenuOpen();
     }
 
     function closeSettings() {
@@ -634,6 +649,7 @@ window.__ModuleLoader__.load({
           return { ok: false, refused: 'off-limits', error: 'refused: settings, account, balance and recharge are off-limits to automation' };
         }
         const settingsWereOpen = settingsOpen();
+        const menuWasOpen = accountMenuOpen();
         clickElement(target[0], a.clickOnly === true);
         await sleep(a.settleMs || DEFAULT_SETTLE);
         // Safety net: a click that opens the settings panel is treated as a refusal
@@ -646,6 +662,18 @@ window.__ModuleLoader__.load({
             refused: 'settings-opened',
             error: 'refused: this click opened the settings panel; it was closed immediately. Settings/account areas are off-limits.',
             settingsClosed: !settingsOpen(),
+            snapshot: snapshot(),
+          };
+        }
+        // Same for the account menu, which is the way into settings and sign-out.
+        if (!menuWasOpen && accountMenuOpen()) {
+          closeAccountMenu();
+          await sleep(150);
+          return {
+            ok: false,
+            refused: 'account-menu-opened',
+            error: 'refused: this click opened the account menu; it was closed immediately and remembered as off-limits.',
+            menuClosed: !accountMenuOpen(),
             snapshot: snapshot(),
           };
         }
