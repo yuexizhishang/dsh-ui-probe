@@ -82,6 +82,49 @@ function readBody(req) {
   });
 }
 
+const SKILL_CONTENT = `# dsh-ui-probe
+
+Verify a DSH plugin page in the running app: open its panel, read real computed
+styles, click a control, wait for an async effect, and capture console errors.
+Afterwards the page returns to the conversation that asked for it.
+
+## Tools
+
+- \`ui_probe\` — bridge status (\`connected\`, \`polls\`, \`heldOpen\`, versions). Read-only.
+- \`ui_page\` — one action:
+  - \`begin { openText | openSelector, settleMs }\` opens the target panel and records the
+    originating conversation (id + title). Omit both to verify in place (no navigation).
+  - \`act { act: { kind, text | selector, value, ms, settleMs, timeoutMs } }\` one step;
+    \`kind\` is \`click\` / \`waitFor\` / \`audit\` / \`snapshot\` / \`wait\` / \`type\` / \`key\`.
+  - \`end\` returns the timeline (\`steps\`, each with \`kind/at/elapsedMs/result\`), a final
+    snapshot and captured errors, then goes back to that conversation.
+  - \`peek\` opens, audits one target and comes straight back (one call).
+  - Read-only: \`audit\`, \`find\`, \`outline\`, \`info\`, \`errors\`; \`restore-origin\` returns to the
+    recorded origin.
+
+## How to verify
+
+1. \`cordis_inspect_query\` → \`Slots.listSubTree\` confirms the slot registration (no window needed).
+2. \`begin\` with the entry's visible text.
+3. \`act waitFor\` until the panel's real content exists (past the skeleton state).
+4. \`act audit\` for the element's box and computed styles; compare with a sibling host element.
+5. To prove a plugin feature reaches the UI: call that plugin's own tool, then
+   \`act waitFor\` the expected change and \`act audit\` the value. Report those values.
+6. \`act errors\` (or the \`errors\` array from \`end\`) catches slot crashes.
+7. \`end\`; quote the timeline values instead of claiming "looks fine".
+
+## Rules
+
+- **Settings, account, balance, recharge and the account menu are off-limits.** Clicks there
+  are refused (\`refused: 'off-limits'\`); a click that opens them is undone immediately. Never
+  try to work around this.
+- A verification session keeps the UI on the panel on purpose; \`end\` (or 30 s without an
+  \`act\`) returns to the conversation.
+- \`type\` reports \`ok\` only after reading the value back; \`ok: false\` means it did not stick.
+- Run one \`ui_page\` call at a time; the bridge has a single request queue.
+- Pixel screenshots are not available from inside the app; use DOM and computed styles.
+`;
+
 export function apply(ctx) {
   const bridge = {
     pending: null,
@@ -143,6 +186,54 @@ export function apply(ctx) {
       }, REQUEST_TIMEOUT_MS);
       bridge.waiter = { timer: timer, resolve: resolve };
     });
+  }
+
+  // Discovery for other people's profiles: a runtime skill carrying the usage guide,
+  // plus one short prompt section so the model knows the skill exists. Both are
+  // optional services; without them the tools still work.
+  const skillsService = ctx.get('skills');
+  if (skillsService && typeof skillsService.register === 'function') {
+    ctx.effect(function () {
+      const dispose = skillsService.register({
+        name: 'dsh-ui-probe',
+        description:
+          'Verify a DSH plugin page in the running app: open its panel, read real DOM and computed styles, click controls, wait for async effects, catch console errors, then return to the conversation.',
+        whenToUse:
+          'When a DSH plugin or UI change must be verified in the running app, or the user asks whether a panel renders, looks right, reacts, or reports errors.',
+        content: SKILL_CONTENT,
+        source: 'runtime',
+        invocation: { modelInvocable: true, userInvocable: true },
+      });
+      return function () {
+        try {
+          dispose();
+        } catch (error) {
+          // already disposed
+        }
+      };
+    }, 'ui-probe: skill');
+  }
+
+  const promptService = ctx.get('systemPrompt');
+  if (promptService && typeof promptService.section === 'function') {
+    ctx.effect(function () {
+      const dispose = promptService.section({
+        name: 'dsh-ui-probe',
+        order: 500,
+        text:
+          'Verifying a DSH plugin page in the running app: the `ui_page` tool runs a verification session ' +
+          '(begin / act / end) that reads real DOM and computed styles, clicks controls, waits for async effects ' +
+          'and returns a timeline plus captured console errors. Load the `dsh-ui-probe` skill for the full guide. ' +
+          'Settings, account, balance, recharge and the account menu are off-limits to automation; never attempt them.',
+      });
+      return function () {
+        try {
+          dispose();
+        } catch (error) {
+          // already disposed
+        }
+      };
+    }, 'ui-probe: prompt section');
   }
 
   function pluginManagerService() {

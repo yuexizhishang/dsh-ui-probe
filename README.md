@@ -38,6 +38,20 @@ git clone https://github.com/yuexizhishang/dsh-ui-probe.git
 
 **注意**：安装后 profile 里是指向本目录的链接，**移动仓库要先卸载**，移完从新路径重装。
 
+## 装上之后，别人的 DeepSeek 会自动知道吗
+
+会，靠三条**插件自带**的发现通道，不需要写任何人的 skill 目录，也不需要用户配置：
+
+| 通道 | 作用 |
+|---|---|
+| **工具描述** | `ui_probe` / `ui_page` 出现在模型工具表里（描述里写明用途与禁区） |
+| **运行时 skill** | `ctx.skills.register()` 注册 `dsh-ui-probe`，进技能目录；模型按 `description` / `whenToUse` 匹配后自动加载完整指南 |
+| **提示词段落** | `ctx.systemPrompt.section()` 注册一小段（order 500），每个会话都注明"要验收 UI 用 `ui_page`，设置/账号/充值禁区" |
+
+- 三者都是**运行时注册**，插件卸载即消失，不留文件；
+- skill 内容是插件自带的（`index.js` 里的 `SKILL_CONTENT`），随版本更新；
+- 如果用户的 profile 没有 `skills` / `systemPrompt` 服务，代码会跳过对应注册，工具本身仍可用。
+
 ## 目录
 
 ```
