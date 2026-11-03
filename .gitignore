@@ -1,0 +1,7 @@
+# runtime artifacts
+.shots/
+node_modules/
+*.log
+
+# local only
+acl-recovery/

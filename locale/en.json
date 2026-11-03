@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "UI Probe — Plugin Page Acceptance",
+    "description": "Acceptance-test a DSH plugin inside the running app: open its page, read real computed styles and geometry, click controls, fill fields, wait for async results, catch console errors, and return to the conversation automatically."
+  }
+}

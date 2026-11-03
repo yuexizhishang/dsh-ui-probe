@@ -1,0 +1,48 @@
+{
+  "name": "@yuexizhishang/dsh-ui-probe",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Acceptance-test a DSH plugin page in the running app: open it, read real computed styles, click controls, fill fields, wait for async effects, catch console errors, then return to the conversation.",
+  "license": "MIT",
+  "author": "yuexizhishang",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yuexizhishang/dsh-ui-probe.git"
+  },
+  "homepage": "https://github.com/yuexizhishang/dsh-ui-probe",
+  "bugs": {
+    "url": "https://github.com/yuexizhishang/dsh-ui-probe/issues"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "cordis",
+    "ui",
+    "verification"
+  ],
+  "icon": "./icon.svg",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./client": "./client.js"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "icon.svg",
+    "locale/*.json"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  }
+}
