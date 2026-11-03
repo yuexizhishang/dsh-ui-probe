@@ -16,6 +16,8 @@
 window.__ModuleLoader__.load({
   id: '@yuexizhishang/dsh-ui-probe',
   factory(require) {
+    const React = require('react');
+    const h = React.createElement;
     const RETRY_MS = 2000;
     const EMPTY_GAP_MS = 800;
     // One id per page load: the Host retires older ids, so a stale generation (a
@@ -77,11 +79,16 @@ window.__ModuleLoader__.load({
       return out;
     }
 
-    function findByText(needle, limit) {
+    function findByText(needle, limit, root, visibleOnly) {
       const found = [];
       if (!needle) return found;
-      for (const element of document.querySelectorAll('body *')) {
+      const scope = root || document;
+      for (const element of scope.querySelectorAll('*')) {
         if (found.length >= limit) break;
+        const tag = element.tagName;
+        // A <script> or <style> node's textContent contains source code, not UI text.
+        if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' || tag === 'TEMPLATE') continue;
+        if (visibleOnly && element.offsetParent === null && element.getClientRects().length === 0) continue;
         const own = Array.from(element.childNodes)
           .filter(function (node) { return node.nodeType === 3; })
           .map(function (node) { return node.textContent || ''; })
@@ -133,7 +140,27 @@ window.__ModuleLoader__.load({
           throw new Error('invalid selector: ' + args.selector);
         }
       }
-      if (args.text) return findByText(args.text, args.limit || 20);
+      if (args.text) {
+        let roots = null;
+        if (args.within) {
+          try {
+            roots = Array.from(document.querySelectorAll(args.within));
+          } catch (error) {
+            throw new Error('invalid within selector: ' + args.within);
+          }
+          if (!roots.length) throw new Error('within container not found: ' + args.within);
+        }
+        if (!roots) return findByText(args.text, args.limit || 20, null);
+        const found = [];
+        for (const root of roots) {
+          for (const element of findByText(args.text, (args.limit || 20) - found.length, root)) {
+            found.push(element);
+            if (found.length >= (args.limit || 20)) break;
+          }
+          if (found.length >= (args.limit || 20)) break;
+        }
+        return found;
+      }
       return [];
     }
 
@@ -152,9 +179,14 @@ window.__ModuleLoader__.load({
       return String(document.title || '').replace(/\s+—\s+DeepSeek Harness\s*$/, '').trim();
     }
 
-    function clickElement(element) {
-      element.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse' }));
-      element.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerType: 'mouse' }));
+    // Some controls open on pointerdown and toggle on click, so a full synthetic
+    // press can open and immediately close them. `clickOnly` skips the pointer
+    // events for those cases.
+    function clickElement(element, clickOnly) {
+      if (!clickOnly) {
+        element.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse' }));
+        element.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerType: 'mouse' }));
+      }
       if (typeof element.click === 'function') element.click();
       else element.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     }
@@ -558,7 +590,7 @@ window.__ModuleLoader__.load({
       if (a.kind === 'click') {
         const target = resolveTarget(a);
         if (!target.length) return { ok: false, error: 'click target not found' };
-        clickElement(target[0]);
+        clickElement(target[0], a.clickOnly === true);
         await sleep(a.settleMs || DEFAULT_SETTLE);
         return { ok: true, clicked: describe(target[0]), rect: rectOf(target[0]), snapshot: snapshot() };
       }
@@ -599,7 +631,7 @@ window.__ModuleLoader__.load({
     }
 
     return {
-      inject: [],
+      inject: ['slots'],
       apply(ctx) {
         const onError = function (event) {
           recordError('error', (event && event.message) || 'unknown error');
@@ -768,6 +800,242 @@ window.__ModuleLoader__.load({
         };
         document.addEventListener('visibilitychange', onVisibility);
         schedule(0);
+
+        // ---- settings page: version check / update / uninstall ----------------
+        const locale = ctx.get('locale');
+        const TEXTS = {
+          zh: {
+            section: 'UI 探针',
+            title: 'UI 探针（dsh-ui-probe）',
+            desc: '本地可视化插件页面验收工具。这里检查 GitHub 上的版本、安装更新，或卸载本插件。',
+            local: '当前版本',
+            remote: '最新版本',
+            state: '状态',
+            checking: '正在检查…',
+            upToDate: '已是最新版本',
+            outdated: '有可用更新',
+            unknown: '无法判断（未能读取远端版本）',
+            check: '检查更新',
+            update: '更新并安装',
+            uninstall: '卸载插件',
+            confirm: '确认卸载',
+            cancel: '取消',
+            uninstalled: '已提交卸载，页面即将消失',
+            unsafe: '卸载只会移除本插件的依赖与启用行，不会删除仓库或任何用户文件。',
+            noCheck: '尚未检查',
+            sha: '提交',
+            error: '错误',
+          },
+          en: {
+            section: 'UI Probe',
+            title: 'UI Probe (dsh-ui-probe)',
+            desc: 'Local visual acceptance tool for plugin pages. Check the GitHub version, install an update, or uninstall this plugin here.',
+            local: 'Installed',
+            remote: 'Latest',
+            state: 'Status',
+            checking: 'Checking…',
+            upToDate: 'Up to date',
+            outdated: 'Update available',
+            unknown: 'Unknown (could not read the remote version)',
+            check: 'Check for updates',
+            update: 'Update and install',
+            uninstall: 'Uninstall plugin',
+            confirm: 'Confirm uninstall',
+            cancel: 'Cancel',
+            uninstalled: 'Uninstall submitted; this page is about to disappear',
+            unsafe: 'Uninstall only drops this plugin dependency and its enabled row. It never deletes the repository or any user file.',
+            noCheck: 'Not checked yet',
+            sha: 'commit',
+            error: 'Error',
+          },
+        };
+
+        function currentLang() {
+          try {
+            const snapshot = locale && typeof locale.getSnapshot === 'function' ? locale.getSnapshot() : null;
+            const active = (snapshot && snapshot.active) || '';
+            return /^zh/i.test(active) ? 'zh' : 'en';
+          } catch (error) {
+            return 'en';
+          }
+        }
+
+        function t(key) {
+          const dict = TEXTS[currentLang()] || TEXTS.en;
+          return dict[key] || TEXTS.en[key] || key;
+        }
+
+        function useLocaleRevision() {
+          const [, bump] = React.useState(0);
+          React.useEffect(function () {
+            if (!locale || typeof locale.subscribe !== 'function') return undefined;
+            const off = locale.subscribe(function () { bump(function (n) { return n + 1; }); });
+            return function () { try { off(); } catch (error) { /* disposed */ } };
+          }, []);
+        }
+
+        async function selfCall(action, extra) {
+          const response = await fetch('/dsh-ui-probe/self', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(Object.assign({ action: action }, extra || {})),
+          });
+          return await response.json();
+        }
+
+        const SECTION_BOX = { display: 'flex', flexDirection: 'column', gap: '12px', maxWidth: '720px' };
+        const TITLE = { margin: 0, fontSize: '14px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' };
+        const MUTED = { margin: 0, fontSize: '12.5px', lineHeight: 1.6, color: 'var(--dsw-alias-label-secondary)' };
+        const ROW = { display: 'flex', alignItems: 'center', gap: '10px', fontSize: '13px', color: 'var(--dsw-alias-label-primary)' };
+        const KEY = { minWidth: '96px', color: 'var(--dsw-alias-label-secondary)' };
+        const BUTTON = {
+          appearance: 'none',
+          border: '1px solid var(--dsw-alias-border-l1)',
+          background: 'transparent',
+          color: 'var(--dsw-alias-label-primary)',
+          borderRadius: '7px',
+          padding: '5px 12px',
+          fontFamily: 'inherit',
+          fontSize: '12.5px',
+          lineHeight: 1.4,
+          cursor: 'pointer',
+        };
+        const DANGER = Object.assign({}, BUTTON, { color: 'var(--dsw-alias-state-error-primary)' });
+        const CARD = {
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '10px',
+          padding: '14px 16px',
+          border: '1px solid var(--dsw-alias-border-l1)',
+          borderRadius: '10px',
+          background: 'var(--dsw-alias-bg-layer-1)',
+        };
+
+        function SettingsPanel() {
+          useLocaleRevision();
+          const [phase, setPhase] = React.useState('checking');
+          const [check, setCheck] = React.useState(null);
+          const [message, setMessage] = React.useState('');
+          const [confirming, setConfirming] = React.useState(false);
+          const [busy, setBusy] = React.useState(false);
+
+          function applyCheck(result) {
+            setCheck(result);
+            setPhase(!result || result.ok === false ? 'error' : result.upToDate ? 'current' : 'outdated');
+            if (result && result.ok === false) setMessage(result.error || t('error'));
+          }
+
+          async function runCheck() {
+            setBusy(true);
+            setPhase('checking');
+            setMessage('');
+            try {
+              applyCheck(await selfCall('check'));
+            } catch (error) {
+              setPhase('error');
+              setMessage(String((error && error.message) || error));
+            } finally {
+              setBusy(false);
+            }
+          }
+
+          React.useEffect(function () {
+            let live = true;
+            setPhase('checking');
+            selfCall('check')
+              .then(function (result) { if (live) applyCheck(result); })
+              .catch(function (error) { if (live) { setPhase('error'); setMessage(String((error && error.message) || error)); } });
+            return function () { live = false; };
+          }, []);
+
+          async function runUpdate() {
+            if (busy) return;
+            setBusy(true);
+            setMessage('');
+            try {
+              const result = await selfCall('update', check && check.sha ? { sha: check.sha } : {});
+              if (result && result.skipped) {
+                setMessage(t('upToDate'));
+              } else if (result && result.ok === false) {
+                setPhase('error');
+                setMessage((result.error && (result.error.diagnostic || result.error.code)) || result.error || t('error'));
+              } else if (result) {
+                setMessage(
+                  '安装完成：' + String(result.application || 'applied') +
+                  (result.version ? ' v' + result.version : '') +
+                  (result.application === 'restart-required' ? '（需要重启 DSH 才能生效）' : ''),
+                );
+              }
+            } catch (error) {
+              setPhase('error');
+              setMessage(String((error && error.message) || error));
+            } finally {
+              setBusy(false);
+            }
+          }
+
+          async function runUninstall() {
+            if (busy) return;
+            setBusy(true);
+            try {
+              const result = await selfCall('uninstall');
+              setMessage(result && result.note ? result.note : t('uninstalled'));
+            } catch (error) {
+              setPhase('error');
+              setMessage(String((error && error.message) || error));
+            } finally {
+              setBusy(false);
+              setConfirming(false);
+            }
+          }
+
+          const statusText = phase === 'checking'
+            ? t('checking')
+            : phase === 'current'
+              ? t('upToDate')
+              : phase === 'outdated'
+                ? t('outdated')
+                : phase === 'error'
+                  ? t('error')
+                  : t('noCheck');
+
+          const localValue = check && check.local ? check.local : '—';
+          const remoteValue = check && check.remote ? check.remote : (phase === 'error' ? '—' : t('unknown'));
+
+          return h('div', { style: SECTION_BOX, 'data-plugin': 'dsh-ui-probe-settings' },
+            h('h2', { style: TITLE }, t('title')),
+            h('p', { style: MUTED }, t('desc')),
+            h('div', { style: CARD },
+              h('div', { style: ROW }, h('span', { style: KEY }, t('local')), h('span', null, localValue)),
+              h('div', { style: ROW }, h('span', { style: KEY }, t('remote')),
+                h('span', null, check && check.sha ? remoteValue + '  (' + t('sha') + ' ' + String(check.sha).slice(0, 7) + ')' : remoteValue)),
+              h('div', { style: ROW }, h('span', { style: KEY }, t('state')), h('span', null, statusText)),
+              message ? h('p', { style: MUTED }, message) : null,
+              h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '2px' } },
+                h('button', { type: 'button', style: BUTTON, disabled: busy, onClick: runCheck }, t('check')),
+                h('button', {
+                  type: 'button',
+                  style: Object.assign({}, BUTTON, phase === 'outdated' ? {} : { opacity: 0.5, cursor: 'default' }),
+                  disabled: busy || phase !== 'outdated',
+                  onClick: runUpdate,
+                }, t('update')),
+                confirming
+                  ? h('button', { type: 'button', style: DANGER, disabled: busy, onClick: runUninstall }, t('confirm'))
+                  : h('button', { type: 'button', style: DANGER, disabled: busy, onClick: function () { setConfirming(true); } }, t('uninstall')),
+              ),
+            ),
+            h('p', { style: MUTED }, t('unsafe')),
+          );
+        }
+
+        ctx.slots.inject('settings.section', function () {
+          return ctx.slots.register({
+            name: 'settings.section',
+            id: 'ui-probe',
+            order: 90,
+            label: function () { return t('section'); },
+          }, SettingsPanel);
+        });
 
         ctx.effect(function () {
           return function () {

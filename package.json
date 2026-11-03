@@ -1,6 +1,6 @@
 {
   "name": "@yuexizhishang/dsh-ui-probe",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "DeepSeek Harness 的本地可视化插件页面验收工具：在对话里打开目标插件页面，读真实 DOM 与计算样式、点按钮、填输入框、等异步效果，结束后自动回到原对话。",

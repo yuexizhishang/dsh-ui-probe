@@ -70,8 +70,23 @@ end                                          返回时间线 + 快照 + errors�
 
 **三重兜底**：`end` 显式收尾；30 秒无新 `act` 自动收尾；页面刷新/崩溃后按 `sessionStorage` 里的起点自动点回。回退优先用 `[data-session-id]`（Host 把调用方 `agent.id` 下发），失败才退回标题，两者都失败会明确 `failed`，不乱点。
 
+## 设置页（版本 / 更新 / 卸载）
+
+设置 → 侧栏「UI 探针」里提供三项功能：
+
+| 功能 | 行为 |
+|---|---|
+| 自动检查 | 打开设置页即请求 GitHub（`api.github.com/repos/<repo>/commits/main` + `raw.githubusercontent.com/.../package.json`），显示当前版本、最新版本、提交号与状态 |
+| 更新并安装 | 远端版本更新时可用；调用 `pluginManager.installBundle('github:<repo>#<sha>')`，只有远端更新才动作（已是最新则跳过） |
+| 卸载插件 | 二次确认后调用 `pluginManager.removeBundle('@yuexizhishang/dsh-ui-probe')`；只移除本插件的依赖与启用行，**不删除仓库、不删除任何用户文件** |
+
+- **判断依据是 `package.json` 的 `version`**：只推代码不改版本号，别人看到的还是"已是最新"。发新版时先改版本号再推送。
+- 更新走 GitHub 的 commit sha，装完若提示 `restart-required`，重启 DSH 生效。
+- 这是设置页自己的网络请求（Host 侧 `fetch`），失败会原样显示（例如仓库尚未公开时是 `HTTP 404`）。
+
 ## 已验证（2026-11-03）
 
+- 设置页（2026-11-03 实测）：`settings.section` 注册为「UI 探针」（order 90）；打开设置时自动检查 GitHub；仓库未推送时状态显示「错误 / GitHub API: HTTP 404 from …/commits/main」，**不假装成功**；三个按钮齐全，`更新并安装` 在非"有可用更新"时禁用；卸载文案明确"不删除仓库或任何用户文件"。
 - 会话：`begin/act/end`、8 步时间线、`errors: []`、`restored.via: session-id`；
 - 点击：第三方插件面板里点按钮，class 变为 `lc-gran-on`、色值从灰字透明底变白字深底；
 - 端到端：装回 `sidebar-notes` 样例 → 打开便签 → 填 textarea → 点"清空"（按钮 45.3→69.3px、变红）→ 连点"确认清空" → 出现"还没有内容"空状态 → 自动回对话；

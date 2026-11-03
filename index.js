@@ -21,12 +21,44 @@
  */
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { readFile } from 'node:fs/promises';
 
 export const inject = ['tools', 'webServer'];
 
 const ROUTE_PREFIX = '/dsh-ui-probe';
 const REQUEST_TIMEOUT_MS = 30000;
 const HOLD_MS = 55000;
+
+// Self-management (settings page): version check, update, uninstall.
+const SELF_NAME = '@yuexizhishang/dsh-ui-probe';
+const GITHUB_REPO = 'yuexizhishang/dsh-ui-probe';
+const GITHUB_REF = 'main';
+const UPDATE_DELAY_MS = 400;
+
+async function localVersion() {
+  const raw = await readFile(new URL('./package.json', import.meta.url), 'utf8');
+  return JSON.parse(raw).version || null;
+}
+
+function compareVersion(a, b) {
+  const pa = String(a || '0').split(/[.+-]/).map(function (n) { return parseInt(n, 10) || 0; });
+  const pb = String(b || '0').split(/[.+-]/).map(function (n) { return parseInt(n, 10) || 0; });
+  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+    const x = pa[i] || 0;
+    const y = pb[i] || 0;
+    if (x !== y) return x < y ? -1 : 1;
+  }
+  return 0;
+}
+
+async function fetchJson(url, headers) {
+  const response = await fetch(url, {
+    headers: Object.assign({ 'user-agent': 'dsh-ui-probe', accept: 'application/vnd.github+json' }, headers || {}),
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!response.ok) throw new Error('HTTP ' + response.status + ' from ' + url);
+  return await response.json();
+}
 
 function readBody(req) {
   return new Promise(function (resolve) {
@@ -113,6 +145,99 @@ export function apply(ctx) {
     });
   }
 
+  function pluginManagerService() {
+    const manager = ctx.get('pluginManager');
+    if (!manager) throw new Error('pluginManager service is not available in this profile');
+    return manager;
+  }
+
+  // Read the published state of this package. The comparison key is package.json's
+  // version: pushing code without bumping it is not a new release.
+  async function selfCheck() {
+    const local = await localVersion();
+    const info = {
+      ok: true,
+      local: local,
+      remote: null,
+      sha: null,
+      upToDate: null,
+      commitMessage: null,
+      committedAt: null,
+      repo: GITHUB_REPO,
+      ref: GITHUB_REF,
+      checkedAt: Date.now(),
+    };
+    try {
+      const commit = await fetchJson('https://api.github.com/repos/' + GITHUB_REPO + '/commits/' + GITHUB_REF);
+      info.sha = (commit && commit.sha) || null;
+      const head = (commit && commit.commit && commit.commit.message) || '';
+      info.commitMessage = String(head).split('\n')[0].slice(0, 160);
+      info.committedAt = (commit && commit.commit && commit.commit.committer && commit.commit.committer.date) || null;
+    } catch (error) {
+      return {
+        ok: false,
+        local: local,
+        repo: GITHUB_REPO,
+        error: 'GitHub API: ' + ((error && error.message) || String(error)),
+        hint: '仓库尚未推送或当前网络不可达 GitHub',
+      };
+    }
+    try {
+      const response = await fetch(
+        'https://raw.githubusercontent.com/' + GITHUB_REPO + '/' + GITHUB_REF + '/package.json',
+        { headers: { 'user-agent': 'dsh-ui-probe' }, signal: AbortSignal.timeout(15000) },
+      );
+      if (response.ok) {
+        const manifest = JSON.parse(await response.text());
+        info.remote = manifest.version || null;
+      }
+    } catch (error) {
+      info.remoteError = (error && error.message) || String(error);
+    }
+    if (info.remote) info.upToDate = compareVersion(local, info.remote) >= 0;
+    return info;
+  }
+
+  async function selfUpdate(sha) {
+    const manager = pluginManagerService();
+    const check = await selfCheck();
+    if (!check.ok) return { ok: false, skipped: false, error: check.error, check: check };
+    if (check.upToDate) {
+      return { ok: true, skipped: true, reason: 'already up to date', check: check };
+    }
+    const ref = sha || check.sha;
+    const spec = 'github:' + GITHUB_REPO + (ref ? '#' + ref : '');
+    const result = await manager.installBundle(spec, { enabled: true });
+    return {
+      ok: result.application !== 'failed',
+      skipped: false,
+      spec: spec,
+      application: result.application,
+      restartReason: result.restartReason,
+      version: result.version,
+      warnings: result.warnings || [],
+      error: result.error || null,
+      check: check,
+    };
+  }
+
+  function selfUninstall() {
+    const manager = pluginManagerService();
+    // Deliberately a plain timer, not ctx.effect: the removal must run after this
+    // request has been answered, and the plugin unloads itself while doing it.
+    setTimeout(function () {
+      Promise.resolve(manager.removeBundle(SELF_NAME)).catch(function () {
+        // the manager reports its own failures; nothing left to notify here
+      });
+    }, UPDATE_DELAY_MS);
+    return {
+      ok: true,
+      scheduled: true,
+      target: SELF_NAME,
+      note: '已提交卸载：本插件的依赖与启用行会被移除，停止后本页面会消失；不会删除仓库或任何用户文件。',
+    };
+  }
+
   ctx.effect(function () {
     const dispose = ctx.webServer.register({
       kind: 'prefix',
@@ -123,6 +248,37 @@ export function apply(ctx) {
         const url = rawUrl.split('?')[0];
         const query = new URLSearchParams(rawUrl.includes('?') ? rawUrl.slice(rawUrl.indexOf('?') + 1) : '');
         const clientId = query.get('c') || '';
+
+        if (url.endsWith('/self')) {
+          // Settings page actions. These never touch user files: they only call the
+          // plugin manager, which owns the profile dependency and bundle selection.
+          let request = {};
+          try {
+            request = JSON.parse((await readBody(req)) || '{}');
+          } catch (error) {
+            sendJson(res, 400, { ok: false, error: 'invalid json body' });
+            return;
+          }
+          const action = request && request.action;
+          try {
+            if (action === 'check') {
+              sendJson(res, 200, await selfCheck());
+              return;
+            }
+            if (action === 'update') {
+              sendJson(res, 200, await selfUpdate(request.sha));
+              return;
+            }
+            if (action === 'uninstall') {
+              sendJson(res, 200, await selfUninstall());
+              return;
+            }
+            sendJson(res, 400, { ok: false, error: 'unknown action: ' + String(action) });
+          } catch (error) {
+            sendJson(res, 200, { ok: false, error: (error && error.message) || String(error) });
+          }
+          return;
+        }
 
         if (url.endsWith('/poll')) {
           bridge.polls += 1;
@@ -284,13 +440,27 @@ export function apply(ctx) {
             },
             text: { type: 'string', description: 'Visible text target for click/waitFor/audit/type.' },
             selector: { type: 'string', description: 'CSS selector target for click/waitFor/audit/type.' },
+            within: {
+              type: 'string',
+              description: 'CSS selector limiting a text search to one container (click/waitFor/audit/type), so chat text with the same wording cannot win.',
+            },
             value: { type: 'string', description: 'Value to write for kind "type".' },
             key: { type: 'string', description: 'Key to press for kind "key", for example Enter, Escape, Backspace.' },
             clear: { type: 'boolean', description: 'For kind "type": replace the existing content instead of appending. Defaults to true.' },
+            clickOnly: {
+              type: 'boolean',
+              description:
+                'For kind "click": dispatch only a click event, without pointerdown/pointerup. Some triggers open on pointerdown and toggle on click, so the full press closes them again.',
+            },
             ms: { type: 'number', description: 'Delay for kind "wait", at most 30000.' },
             settleMs: { type: 'number', description: 'Wait after the step before reporting. Defaults to 300.' },
             timeoutMs: { type: 'number', description: 'Timeout for kind "waitFor". Defaults to 5000, at most 30000.' },
             limit: { type: 'integer', description: 'Maximum matches to consider. Defaults to 20.' },
+            within: {
+              type: 'string',
+              description:
+                'CSS selector limiting a text search to one container, so a label that also appears in the transcript resolves to the control instead.',
+            },
           },
           required: ['kind'],
           additionalProperties: false,
