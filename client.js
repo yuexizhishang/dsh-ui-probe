@@ -82,7 +82,9 @@ window.__ModuleLoader__.load({
     function findByText(needle, limit, root, visibleOnly) {
       const found = [];
       if (!needle) return found;
-      const scope = root || document;
+      // Restrict the default scope to body: <head> holds <title>, whose text also
+      // contains the page name and would win every text search.
+      const scope = root || document.body;
       for (const element of scope.querySelectorAll('*')) {
         if (found.length >= limit) break;
         const tag = element.tagName;
