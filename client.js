@@ -895,7 +895,17 @@ window.__ModuleLoader__.load({
         schedule(0);
 
         // ---- settings page: version check / update / uninstall ----------------
-        const locale = ctx.get('locale');
+        // The locale service is optional and may not exist yet when this plugin
+        // activates (a cold boot installs it later than HMR does), so resolve it on
+        // every read instead of capturing it once at apply time.
+        function localeService() {
+          try {
+            const service = ctx.get('locale');
+            return service && typeof service.getSnapshot === 'function' ? service : null;
+          } catch (error) {
+            return null;
+          }
+        }
         const TEXTS = {
           zh: {
             section: 'UI 探针',
@@ -945,11 +955,23 @@ window.__ModuleLoader__.load({
           },
         };
 
+        function langFrom(value) {
+          return /^zh/i.test(String(value || '')) ? 'zh' : 'en';
+        }
+
         function currentLang() {
+          const service = localeService();
+          if (service) {
+            try {
+              const snapshot = service.getSnapshot();
+              const active = snapshot && snapshot.active;
+              if (active) return langFrom(active);
+            } catch (error) {
+              // fall through to the document language
+            }
+          }
           try {
-            const snapshot = locale && typeof locale.getSnapshot === 'function' ? locale.getSnapshot() : null;
-            const active = (snapshot && snapshot.active) || '';
-            return /^zh/i.test(active) ? 'zh' : 'en';
+            return langFrom(document.documentElement.getAttribute('lang') || navigator.language);
           } catch (error) {
             return 'en';
           }
@@ -963,9 +985,25 @@ window.__ModuleLoader__.load({
         function useLocaleRevision() {
           const [, bump] = React.useState(0);
           React.useEffect(function () {
-            if (!locale || typeof locale.subscribe !== 'function') return undefined;
-            const off = locale.subscribe(function () { bump(function (n) { return n + 1; }); });
-            return function () { try { off(); } catch (error) { /* disposed */ } };
+            let off = null;
+            function attach() {
+              const service = localeService();
+              if (!service || typeof service.subscribe !== 'function') return false;
+              off = service.subscribe(function () { bump(function (n) { return n + 1; }); });
+              return true;
+            }
+            if (attach()) {
+              return function () { try { off(); } catch (error) { /* disposed */ } };
+            }
+            // Late-arriving locale service: retry once, then re-render so the texts
+            // switch to the active language.
+            const timer = setTimeout(function () {
+              if (attach()) bump(function (n) { return n + 1; });
+            }, 1500);
+            return function () {
+              clearTimeout(timer);
+              try { if (off) off(); } catch (error) { /* disposed */ }
+            };
           }, []);
         }
 
