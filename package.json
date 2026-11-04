@@ -1,7 +1,6 @@
 {
   "name": "@yuexizhishang/dsh-ui-probe",
   "version": "1.0.0",
-  "private": true,
   "type": "module",
   "description": "Acceptance-test a DSH plugin page in the running app: open it, read real computed styles, click controls, fill fields, wait for async effects, catch console errors, then return to the conversation.",
   "license": "MIT",
@@ -36,6 +35,9 @@
     "icon.svg",
     "locale/*.json"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
