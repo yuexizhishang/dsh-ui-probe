@@ -22,7 +22,17 @@ github:yuexizhishang/dsh-ui-probe
 
 等价的完整地址是 `https://github.com/yuexizhishang/dsh-ui-probe`。
 
-**方式二：下载后从本地安装**
+**方式二：从 npm 安装**
+
+在 DeepSeek Harness 的「插件 → 添加插件」里粘贴下面这行，点安装：
+
+```text
+@yuexizhishang/dsh-ui-probe
+```
+
+装的是预构建好的版本，不需要编译。
+
+**方式三：下载后从本地安装**
 
 ```powershell
 git clone https://github.com/yuexizhishang/dsh-ui-probe.git
