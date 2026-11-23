@@ -227,6 +227,75 @@ window.__ModuleLoader__.load({
       return new Promise(function (resolve) { setTimeout(resolve, ms); });
     }
 
+    // What a user can actually press. A text match often lands on a label inside
+    // a button, or on a paragraph that merely mentions the word; clicking those
+    // changes nothing while still reporting success.
+    function controlOf(element) {
+      if (!element || typeof element.closest !== 'function') return null;
+      const control = element.closest(INTERACTIVE_SELECTOR);
+      if (control) return control;
+      if (element.hasAttribute('tabindex')) return element;
+      if (window.getComputedStyle(element).cursor === 'pointer') return element;
+      return null;
+    }
+
+    function textControls(needle, limit) {
+      const text = String(needle || '').trim();
+      const cap = limit || 8;
+      const out = [];
+      for (const element of findByText(text, cap * 4, null, true)) {
+        const control = controlOf(element);
+        if (!control || out.indexOf(control) !== -1) continue;
+        out.push(control);
+        if (out.length >= cap * 3) break;
+      }
+      // Exact label first, then prefix, then contains: "像素" should hit a
+      // panel's own 像素 button before the sidebar's 像素工坊 entry.
+      const exact = text.toLowerCase();
+      const labelOf = function (control) { return textOf(control, 160).trim().toLowerCase(); };
+      out.sort(function (a, b) {
+        const rank = function (control) {
+          const own = labelOf(control);
+          if (own === exact) return 0;
+          if (own.indexOf(exact) === 0) return 1;
+          return 2;
+        };
+        return rank(a) - rank(b);
+      });
+      return out.slice(0, cap);
+    }
+
+    // Controls in the same neighbourhood as a prose match: the useful answer to
+    // "the words are here but the thing to press is over there".
+    function nearbyControls(element, limit) {
+      ensureRefs();
+      let scope = element && element.parentElement;
+      for (let depth = 0; scope && depth < 3; depth += 1) {
+        const found = Array.from(scope.querySelectorAll(INTERACTIVE_SELECTOR))
+          .filter(isRendered)
+          .slice(0, limit || 8)
+          .map(function (control) {
+            return { ref: refByElement.get(control) || null, role: refRole(control), text: refLabel(control) };
+          });
+        if (found.length) return found;
+        scope = scope.parentElement;
+      }
+      return [];
+    }
+
+    // Sidebar panel entries announce themselves with aria-label; matching that
+    // exact label opens a panel without scanning transcript text.
+    function sidebarOpener(text) {
+      const wanted = String(text || '').trim();
+      if (!wanted) return null;
+      const buttons = Array.from(document.querySelectorAll('nav button[aria-label], [class*="panelList"] button[aria-label]'));
+      const labelOf = function (button) { return String(button.getAttribute('aria-label') || '').trim(); };
+      const exact = buttons.filter(function (button) { return labelOf(button) === wanted; });
+      if (exact.length) return exact[0];
+      const loose = buttons.filter(function (button) { return labelOf(button).indexOf(wanted) !== -1; });
+      return loose.length ? loose[0] : null;
+    }
+
     // ---- ref registry ------------------------------------------------------
     // Two controls can share a visible label, so a snapshot also hands out
     // stable handles (e1, e2 …) that later actions target directly. The registry
@@ -333,6 +402,9 @@ window.__ModuleLoader__.load({
     // Long tasks are recorded while the session runs, so a step reports the
     // main-thread stalls it caused instead of only its wall time.
     let longTasks = [];
+
+    // Set in apply(): returns ctx.layout or null.
+    let resolveLayout = function () { return null; };
 
     function nextFrame() {
       return new Promise(function (resolve) {
@@ -472,7 +544,12 @@ window.__ModuleLoader__.load({
 
     // The window title is "<session title> — DeepSeek Harness".
     function sessionTitle() {
-      return String(document.title || '').replace(/\s+—\s+DeepSeek Harness\s*$/, '').trim();
+      const title = String(document.title || '').replace(/\s+—\s+DeepSeek Harness\s*$/, '').trim();
+      // While a panel is open the document title is just the app name; the last
+      // recorded report still knows which conversation the work belongs to.
+      if (title && title !== 'DeepSeek Harness') return title;
+      const last = readLastEnd();
+      return (last && last.origin) || title || '';
     }
 
     // Some controls open on pointerdown and toggle on click, so a full synthetic
@@ -864,7 +941,16 @@ window.__ModuleLoader__.load({
         reason: (info && info.reason) || 'explicit end',
       };
       let restored = null;
-      if (!hasComposer()) {
+      if (session.panelId) {
+        const layout = resolveLayout();
+        if (layout && typeof layout.selectPanel === 'function') {
+          layout.selectPanel('conversation');
+          await sleep(220);
+        }
+      }
+      // Switching panels does not reopen the session, so the row click still runs
+      // after it: the row is matched by session id, not by title.
+      if (!hasComposer() || session.panelId) {
         const match = rowFor(session.agentId, session.origin);
         if (match) {
           clickElement(match.row);
@@ -872,7 +958,14 @@ window.__ModuleLoader__.load({
           restored = {
             session: session.origin,
             agentId: session.agentId || null,
-            via: match.via,
+            via: session.panelId ? 'layout.selectPanel + row' : match.via,
+            backInConversation: hasComposer(),
+          };
+        } else if (session.panelId) {
+          restored = {
+            session: session.origin,
+            agentId: session.agentId || null,
+            via: 'layout.selectPanel',
             backInConversation: hasComposer(),
           };
         } else {
@@ -894,26 +987,78 @@ window.__ModuleLoader__.load({
 
     async function beginSession(args) {
       if (session) return { ok: false, error: 'a verification session is already open; call end first' };
+      // Read the origin title before any navigation: opening a panel changes
+      // document.title, and the title is how end() finds the way back.
+      const originTitle = sessionTitle();
       // No opener means "verify in place": useful when the effect to check is in
       // the conversation itself (typing, a chat row, a toast).
+      const openPanel = String(args.openPanel || '').trim();
       const wantsOpen = Boolean(
-        String(args.openText || '').trim() || String(args.openSelector || '').trim() || String(args.openRef || '').trim(),
+        openPanel
+        || String(args.openText || '').trim()
+        || String(args.openSelector || '').trim()
+        || String(args.openRef || '').trim(),
       );
       // An opener has to be a real control. Matching a text span in the
       // transcript would "open" nothing and still report success, and a loose
       // [tabindex] match lets scroll containers pass as controls.
       const CLICKABLE = 'button, a[href], summary, [role="button"], [role="tab"], [role="menuitem"], [role="treeitem"], [role="option"], input[type="button"], input[type="submit"]';
-      const opener = wantsOpen
-        ? resolveTarget({
-          selector: args.openSelector || '',
-          text: args.openText || '',
-          ref: args.openRef || '',
-          limit: 20,
-        }).filter(function (element) {
-          return element.matches(CLICKABLE) || Boolean(element.closest(CLICKABLE));
-        })
-        : [];
-      if (wantsOpen && !opener.length) {
+      let opener = [];
+      let openedBy = null;
+      if (openPanel) {
+        // Panel ids are what the shell uses for ctx.layout.selectPanel(): the
+        // sidebar entry id, which a plugin also registers as its main slot key.
+        const layout = resolveLayout();
+        if (!layout || typeof layout.selectPanel !== 'function') {
+          return { ok: false, error: 'layout.selectPanel is not available in this client; pass openText instead' };
+        }
+        let selectError = null;
+        try {
+          layout.selectPanel(openPanel);
+        } catch (error) {
+          selectError = (error && error.message) || String(error);
+        }
+        if (selectError) {
+          return {
+            ok: false,
+            error: 'layout.selectPanel failed: ' + String(selectError).split('\n')[0],
+            hint: 'The id must be a registered main panel key (the plugin\'s sidebar entry id). Use openText when the id is unknown.',
+          };
+        }
+        await sleep(args.settleMs || 500);
+        const opened = panelInfo();
+        if (!opened.title) {
+          layout.selectPanel('conversation');
+          await sleep(200);
+          return {
+            ok: false,
+            error: 'no panel rendered for id: ' + openPanel,
+            panel: opened,
+            hint: 'The id is the sidebar entry id (the same value the plugin registers as its main slot key); read it from the plugin source, or fall back to openText.',
+          };
+        }
+        openedBy = 'layout.selectPanel';
+      } else if (wantsOpen) {
+        const sidebar = sidebarOpener(args.openText);
+        if (sidebar) {
+          if (isOffLimits(sidebar)) {
+            return { ok: false, refused: 'off-limits', error: 'refused: settings, account, balance and recharge are off-limits to automation' };
+          }
+          opener = [sidebar];
+          openedBy = 'sidebar aria-label';
+        } else {
+          opener = resolveTarget({
+            selector: args.openSelector || '',
+            text: args.openText || '',
+            ref: args.openRef || '',
+            limit: 20,
+          }).filter(function (element) {
+            return element.matches(CLICKABLE) || Boolean(element.closest(CLICKABLE));
+          });
+          openedBy = opener.length ? 'click' : null;
+        }
+      }
+      if (wantsOpen && !openPanel && !opener.length) {
         // A wrong name is the caller's mistake, not a missing panel: hand back
         // what is actually openable so the next call can hit it in one try.
         const openable = refItems(60).filter(function (item) {
@@ -925,17 +1070,20 @@ window.__ModuleLoader__.load({
           error: 'opener not found: ' + (args.openText || args.openSelector || '(none)'),
           candidates: openable.slice(0, 24),
           candidateCount: openable.length,
-          hint: 'Pick one candidate text as openText, or pass its ref as openRef.',
+          hint: 'Pick one candidate text as openText, pass its ref as openRef, or pass the panel id as openPanel.',
         };
       }
       if (opener.length && isOffLimits(opener[0])) {
         return { ok: false, refused: 'off-limits', error: 'refused: settings, account, balance and recharge are off-limits to automation' };
       }
       session = {
-        origin: sessionTitle(),
+        origin: originTitle,
         agentId: args.agentSessionId || null,
         startedAt: Date.now(),
         steps: [],
+        // Remembered so end() can return with selectPanel('conversation')
+        // instead of clicking a sidebar row.
+        panelId: openPanel || null,
       };
       persistSession();
       if (opener.length) {
@@ -948,8 +1096,10 @@ window.__ModuleLoader__.load({
         ok: true,
         origin: session.origin,
         agentId: session.agentId,
-        inPlace: opener.length === 0,
-        opened: opener.length ? describe(opener[0]) : null,
+        inPlace: !wantsOpen,
+        openedBy: openedBy,
+        opened: opener.length ? describe(opener[0]) : (openPanel || null),
+        panel: panelInfo(),
         snapshot: snapshot(),
       };
     }
@@ -972,8 +1122,26 @@ window.__ModuleLoader__.load({
     async function runAct(a) {
       if (!a || !a.kind) return { ok: false, error: 'act.kind is required' };
       if (a.kind === 'click') {
-        const target = resolveTarget(a);
+        let target = resolveTarget(a);
         if (!target.length) return { ok: false, error: targetError(a, 'click') };
+        // Text targeting lands on labels and prose. A click only means something
+        // on a control: upgrade to the nearest control and refuse when there is
+        // none, instead of clicking nothing and reporting success.
+        let resolvedFrom = null;
+        if (a.text && !a.selector && !a.ref) {
+          const controls = textControls(a.text, 8);
+          if (!controls.length) {
+            return {
+              ok: false,
+              error: 'text matched no control to click: ' + a.text,
+              matched: { node: describe(target[0]), text: textOf(target[0], 80), rect: rectOf(target[0]) },
+              hint: 'Pass the ref of a control from a snapshot, or a selector that resolves to it.',
+              candidates: nearbyControls(target[0], 8),
+            };
+          }
+          if (target[0] !== controls[0]) resolvedFrom = describe(target[0]);
+          target = [controls[0]];
+        }
         if (isOffLimits(target[0])) {
           return { ok: false, refused: 'off-limits', error: 'refused: settings, account, balance and recharge are off-limits to automation' };
         }
@@ -1013,7 +1181,7 @@ window.__ModuleLoader__.load({
             snapshot: snapshot(),
           };
         }
-        return { ok: true, clicked: describe(target[0]), ref: refByElement.get(target[0]) || null, rect: rectOf(target[0]), interactionMs: interactionMs, effect: effect, snapshot: snapshot() };
+        return { ok: true, clicked: describe(target[0]), resolvedFrom: resolvedFrom, ref: refByElement.get(target[0]) || null, rect: rectOf(target[0]), interactionMs: interactionMs, effect: effect, snapshot: snapshot() };
       }
       if (a.kind === 'waitFor') return await waitForTarget(a);
       if (a.kind === 'audit') {
@@ -1063,6 +1231,15 @@ window.__ModuleLoader__.load({
     return {
       inject: ['slots'],
       apply(ctx) {
+        // ctx.layout switches the main panel by id; resolved lazily so a profile
+        // without that service still gets the click path.
+        resolveLayout = function () {
+          try {
+            return (ctx && typeof ctx.get === 'function' ? ctx.get('layout') : null) || null;
+          } catch (error) {
+            return null;
+          }
+        };
         const onError = function (event) {
           recordError('error', (event && event.message) || 'unknown error');
         };

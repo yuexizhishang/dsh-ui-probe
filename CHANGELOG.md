@@ -6,6 +6,37 @@
 
 ## 未发布（计划 1.1.0）
 
+### 阶段 6 — 按面板 id 切换、侧栏按 aria-label 打开、点击只落控件（2026-11-23）
+
+状态：已实现并实机验证（0.2.2-rc.3，Electron 44.7.0）。
+
+**问题**：
+
+- `begin` 只能靠点侧栏切面板，而侧栏按钮在 DOM 里只有文字：`click { text: "像素" }` 命中侧栏标题的 `span`，`{ text: "示例精灵" }` 命中正文 `<p>`，**两次都返回 `ok:true` 却什么都没发生**。
+- 面板 id 其实存在（`main` 槽以"侧栏入口 id"为 key，`ctx.layout.selectPanel(id)` 可直接切），但之前完全没用。
+
+**改动**（只加事实与更准的定位）：
+
+- **`begin { openPanel: "<id>" }`**：调 `ctx.layout.selectPanel(id)` 切主面板，不点击；切完用面板标题自检，标题为空就切回 `conversation` 并报错。id 非法时把 shell 的报文原样带出（实测：`main panel "no-such-panel" is not registered`），不再抛堆栈。
+- **`begin { openText }`**：先在 `nav button[aria-label]` / `[class*="panelList"] button[aria-label]` 里精确匹配侧栏入口再点，匹配不到才回落到原来的可点击元素扫描。
+- **`end`**：面板会话先 `selectPanel('conversation')`，再按会话 id 点侧栏行重新打开该会话（只切面板不会重新打开会话）；`restored.via` 写作 `layout.selectPanel + row`。
+- **`origin` 提前取**：切面板会改 `document.title`，现在在切换前记录；`sessionTitle()` 在标题只剩应用名时回落到上一次报告里的 origin。
+- **`click { text }` 只落控件**：命中元素向上取最近的可交互祖先（button / role / tabindex / `cursor:pointer`）；候选排序为整段文字完全相等 → 前缀 → 包含；找不到控件时返回 `ok:false` + `matched` + 附近 3 层内的控件候选（带 ref）；发生升级时返回 `resolvedFrom`。
+
+**验证**：
+
+| 场景 | 结果 |
+|---|---|
+| `begin { openPanel: "pixel-forge" }` | `openedBy: layout.selectPanel`，`panel: 像素工坊 (heading)` |
+| `begin { openText: "人设工坊" }` | `openedBy: sidebar aria-label`，`panel: 人设工坊` |
+| `click { text: "示例精灵" }`（该词原本只命中正文段落） | `resolvedFrom: p` → 点中真实按钮，`effect.mutations: 12` |
+| `click { text: "像素" }`（原本命中侧栏 `span`） | `resolvedFrom: span` → 面板内按钮 `(660.7, 121.7)`，`effect.mutations: 3` |
+| `click { text: "放大倍数" }`（纯文字，无控件） | `ok:false`，`matched: span`，`candidates`: 两个 combobox |
+| `end`（openPanel 会话） | `restored.via: layout.selectPanel + row`，`backInConversation: true` |
+| `begin { openPanel: "no-such-panel" }` | `ok:false`，报文含 `main panel "no-such-panel" is not registered`，页面留在原处 |
+
+**兼容性**：`index.js` 新增 `openPanel` 参数与其 schema 描述，需重载宿主后生效（客户端半边会自行热加载）；旧调用行为不变。
+
 ### 阶段 5 — 点击有没有反应、报错归因来源、资源加载失败（2026-11-23）
 
 状态：点击变化摘要与报错归因**已实机验证**；资源加载失败监听已实现，本次没有可触发的失败资源，**未实测**。

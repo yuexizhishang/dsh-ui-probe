@@ -98,8 +98,10 @@ Afterwards the page returns to the conversation that asked for it.
 
 - \`ui_probe\` — bridge status (\`connected\`, \`polls\`, \`heldOpen\`, versions). Read-only.
 - \`ui_page\` — one action:
-  - \`begin { openText | openSelector, settleMs }\` opens the target panel and records the
-    originating conversation (id + title). Omit both to verify in place (no navigation).
+  - \`begin { openPanel | openText | openSelector, settleMs }\` opens the target panel and
+    records the originating conversation (id + title). \`openPanel\` takes a panel id and
+    switches through the shell (\`ctx.layout.selectPanel\`) with no clicking; \`openText\`
+    presses the sidebar entry with that exact \`aria-label\`. Omit all to verify in place.
   - \`act { act: { kind, text | selector, value, ms, settleMs, timeoutMs } }\` one step;
     \`kind\` is \`click\` / \`waitFor\` / \`audit\` / \`snapshot\` / \`wait\` / \`type\` / \`key\`.
   - \`end\` returns the timeline (\`steps\`, each with \`kind/at/elapsedMs/result\`), a final
@@ -127,6 +129,9 @@ Afterwards the page returns to the conversation that asked for it.
 - A verification session keeps the UI on the panel on purpose; \`end\` (or 30 s without an
   \`act\`) returns to the conversation.
 - \`type\` reports \`ok\` only after reading the value back; \`ok: false\` means it did not stick.
+- A text \`click\` only presses a control: the nearest button / role / tabindex ancestor is
+  used, and prose with no control behind it answers \`ok: false\` with candidates. Re-target
+  with a \`ref\` instead of rewording the text.
 - Run one \`ui_page\` call at a time; the bridge has a single request queue.
 - Pixel screenshots are not available from inside the app; use DOM and computed styles.
 `;
@@ -531,7 +536,7 @@ export function apply(ctx) {
   register({
     name: 'ui_page',
     description:
-      'Local visual acceptance tool for DSH plugin pages. Works as a session: "begin" opens the target panel and remembers the conversation it came from, "act" performs one step (click / waitFor / audit / snapshot / wait / type / key) and records it in a timeline, "run" executes an entire queue of steps in one call and answers with every step plus a summary, "end" returns that timeline and goes back to the conversation. A snapshot hands out refs ("e5"); target them with { ref: "e5" } when two controls share a label. Every step reports timing: totalMs, interactionMs (click → next frame), waitedMs (waitFor time-to-appear) and the long tasks it caused. Use waitFor to observe effects that arrive later, and interleave the plugin\'s own tools between acts to confirm the visual UI reflects them. OFF-LIMITS: settings, account, balance, recharge, and the account menu are never automated. Actions there are refused, and a click that opens the settings panel is closed again immediately and reported as a refusal. The session also ends by itself after 30s without an act and puts the page back after a reload. Read-only actions (audit/find/outline/info/errors) never change what the user is looking at; "peek" is the quick open-read-return shortcut.',
+      'A local visual acceptance tool for DSH plugin pages. A session: "begin" opens the target panel (pass "openPanel" with a panel id to switch through the shell, "openText" to press a sidebar entry by its label, or neither to verify in place) and remembers the conversation it came from; "act" performs one step (click / waitFor / audit / snapshot / wait / type / key) and records it in a timeline; "run" executes an entire queue of steps in one call and answers with every step plus a summary; "end" returns that timeline and goes back to the conversation. A snapshot hands out refs ("e5"); target them with { ref: "e5" } when two controls share a label. A text click only lands on a control: the nearest button/role/tabindex ancestor is clicked, and a text match with no control answers ok:false with candidates instead of clicking nothing. Every step reports timing (totalMs, interactionMs = click → next frame, waitedMs for waitFor, the long tasks it caused); a click also reports its "effect" — DOM mutations, added/removed nodes, focus, scroll, title and url changes — so "nothing happened" is visible. Errors come back with act/run/peek and carry the panel they fired in plus "panelSource" (how that panel was identified). Use waitFor to observe effects that arrive later, and interleave the plugin\'s own tools between acts to confirm the visual UI reflects them. OFF-LIMITS: settings, account, balance, recharge, and the account menu are never automated. Actions there are refused, and a click that opens the settings panel is closed again immediately and reported as a refusal. The session also ends by itself after 30s without an act and puts the page back after a reload. Read-only actions (audit/find/outline/info/errors) never change what the user is looking at; "peek" is the quick open-read-return shortcut.',
     parameters: {
       type: 'object',
       properties: {
@@ -552,6 +557,11 @@ export function apply(ctx) {
           type: 'string',
           description:
             'Ref of the control that opens the panel (from a snapshot or from the candidates returned when openText misses).',
+        },
+        openPanel: {
+          type: 'string',
+          description:
+            'Panel id for action "begin": switches the main panel through the shell (ctx.layout.selectPanel) instead of clicking. The id is the sidebar entry id — the same value the plugin registers as its main slot key, for example "pixel-forge". When the id is unknown, use openText instead.',
         },
         settleMs: {
           type: 'number',
@@ -686,6 +696,7 @@ export function apply(ctx) {
         openText: args && typeof args.openText === 'string' ? args.openText : '',
         openSelector: args && typeof args.openSelector === 'string' ? args.openSelector : '',
         openRef: args && typeof args.openRef === 'string' ? args.openRef : '',
+        openPanel: args && typeof args.openPanel === 'string' ? args.openPanel : '',
         settleMs: args && Number.isFinite(args.settleMs) ? Math.max(0, Math.min(10000, args.settleMs)) : 300,
         act: args && args.act && typeof args.act === 'object' ? args.act : null,
         // The queue for action "run": each entry is one act object. Capped so a
