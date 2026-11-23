@@ -320,6 +320,45 @@ window.__ModuleLoader__.load({
       return what + ' target not found';
     }
 
+    // Each command runs under its own budget. The session's idle timer must not
+    // cancel a queue that is still working, and a stuck command has to fail with
+    // a nameable reason instead of hanging the whole request.
+    const DEFAULT_COMMAND_TIMEOUT_MS = 90000;
+    const COMMAND_TIMEOUT_CEILING_MS = 600000;
+
+    function commandTimeoutOf(spec, fallback) {
+      const raw = spec && Number.isFinite(spec.commandTimeoutMs) ? spec.commandTimeoutMs : fallback;
+      if (!Number.isFinite(raw)) return DEFAULT_COMMAND_TIMEOUT_MS;
+      return Math.max(1000, Math.min(COMMAND_TIMEOUT_CEILING_MS, raw));
+    }
+
+    function withCommandTimeout(promise, ms, label) {
+      return new Promise(function (resolve) {
+        let settled = false;
+        const timer = setTimeout(function () {
+          if (settled) return;
+          settled = true;
+          resolve({
+            ok: false,
+            timedOut: true,
+            timeoutMs: ms,
+            error: 'command timed out after ' + ms + 'ms' + (label ? ': ' + label : ''),
+          });
+        }, ms);
+        promise.then(function (value) {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve(value);
+        }, function (error) {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve({ ok: false, error: 'command failed: ' + ((error && error.message) || error) });
+        });
+      });
+    }
+
     // The composer exists only while a conversation is on screen; that attribute
     // is stable, unlike the generated class names.
     function hasComposer() {
@@ -979,7 +1018,11 @@ window.__ModuleLoader__.load({
             if (!session) return { ok: false, error: 'no open verification session; call begin first' };
             const started = Date.now();
             const longTaskMark = longTasks.length;
-            const result = await runAct(args.act || {});
+            const result = await withCommandTimeout(
+              runAct(args.act || {}),
+              commandTimeoutOf(args.act, args.commandTimeoutMs),
+              (args.act && args.act.kind) || 'act',
+            );
             const elapsed = Date.now() - started;
             const step = {
               n: session.steps.length + 1,
@@ -990,7 +1033,6 @@ window.__ModuleLoader__.load({
               result: result,
             };
             session.steps.push(step);
-            touchIdle(finishSession);
             return { ok: true, value: { step: step, sessionSteps: session.steps.length, origin: session.origin } };
           }
           if (pending.action === 'run') {
@@ -1008,7 +1050,11 @@ window.__ModuleLoader__.load({
               const spec = queue[index] || {};
               const started = Date.now();
               const longTaskMark = longTasks.length;
-              const result = await runAct(spec);
+              const result = await withCommandTimeout(
+                runAct(spec),
+                commandTimeoutOf(spec, args.commandTimeoutMs),
+                spec.kind || ('step ' + (index + 1)),
+              );
               const elapsed = Date.now() - started;
               const step = {
                 n: session.steps.length + 1,
@@ -1026,7 +1072,6 @@ window.__ModuleLoader__.load({
                 if (stopOnFail) break;
               }
             }
-            touchIdle(finishSession);
             return {
               ok: true,
               value: {
@@ -1097,6 +1142,9 @@ window.__ModuleLoader__.load({
               return;
             }
             let payload;
+            // The idle countdown measures the quiet time after an answer, never
+            // the time spent producing it; a long queue must not cancel itself.
+            clearIdle();
             try {
               const handled = await handle(pending);
               payload = handled.ok
@@ -1110,6 +1158,7 @@ window.__ModuleLoader__.load({
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify(payload),
             });
+            if (session) touchIdle(finishSession);
           } catch (error) {
             delay = RETRY_MS;
           } finally {

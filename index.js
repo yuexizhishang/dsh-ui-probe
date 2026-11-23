@@ -27,6 +27,12 @@ export const inject = ['tools', 'webServer'];
 
 const ROUTE_PREFIX = '/dsh-ui-probe';
 const REQUEST_TIMEOUT_MS = 30000;
+// Each command inside a page request gets its own budget; a queue of slow steps
+// must not be cut off by the plain request timeout. The conversation may raise
+// it per call (commandTimeoutMs) when a feature legitimately needs longer.
+const DEFAULT_COMMAND_TIMEOUT_MS = 90000;
+const COMMAND_TIMEOUT_CEILING_MS = 600000;
+const QUEUE_MARGIN_MS = 15000;
 const HOLD_MS = 55000;
 
 // Self-management (settings page): version check, update, uninstall.
@@ -166,7 +172,8 @@ export function apply(ctx) {
     return true;
   }
 
-  function request(action, args) {
+  function request(action, args, timeoutMs) {
+    const limit = Number.isFinite(timeoutMs) ? Math.max(REQUEST_TIMEOUT_MS, timeoutMs) : REQUEST_TIMEOUT_MS;
     return new Promise(function (resolve, reject) {
       if (bridge.pending) {
         reject(new Error('another page request is still pending; the bridge takes one at a time'));
@@ -180,10 +187,10 @@ export function apply(ctx) {
         bridge.waiter = null;
         reject(
           new Error(
-            'no answer from the DSH page within ' + REQUEST_TIMEOUT_MS + 'ms. Is the client half loaded in an open window?',
+            'no answer from the DSH page within ' + limit + 'ms. Is the client half loaded in an open window?',
           ),
         );
-      }, REQUEST_TIMEOUT_MS);
+      }, limit);
       bridge.waiter = { timer: timer, resolve: resolve };
     });
   }
@@ -605,6 +612,7 @@ export function apply(ctx) {
               ms: { type: 'number' },
               settleMs: { type: 'number' },
               timeoutMs: { type: 'number' },
+              commandTimeoutMs: { type: 'number' },
               limit: { type: 'integer' },
             },
             required: ['kind'],
@@ -614,6 +622,11 @@ export function apply(ctx) {
         stopOnFail: {
           type: 'boolean',
           description: 'For action "run": stop at the first failing step (default true). Set false to run the rest regardless.',
+        },
+        commandTimeoutMs: {
+          type: 'number',
+          description:
+            'Per-command timeout in milliseconds applied by the page half: default 90000, max 600000. Each command that produces no result within it is reported as timedOut; raise it when the conversation knows a feature legitimately takes minutes, and lower it to fail fast.',
         },
         ref: {
           type: 'string',
@@ -667,7 +680,30 @@ export function apply(ctx) {
         ref: args && typeof args.ref === 'string' ? args.ref : '',
         agentSessionId: agentSessionId,
       };
-      return await request(action, payload);
+      const commandTimeoutMs = args && Number.isFinite(args.commandTimeoutMs)
+        ? Math.max(1000, Math.min(COMMAND_TIMEOUT_CEILING_MS, args.commandTimeoutMs))
+        : DEFAULT_COMMAND_TIMEOUT_MS;
+      payload.commandTimeoutMs = commandTimeoutMs;
+      // The whole request must outlive the per-command budgets it carries, or a
+      // legitimately slow step would be reported as "page not loaded".
+      let budget = REQUEST_TIMEOUT_MS;
+      if (action === 'act') {
+        budget = commandTimeoutMs + QUEUE_MARGIN_MS;
+      } else if (action === 'run') {
+        let total = 0;
+        for (const step of payload.steps || []) {
+          const own = step && Number.isFinite(step.commandTimeoutMs)
+            ? Math.max(1000, Math.min(COMMAND_TIMEOUT_CEILING_MS, step.commandTimeoutMs))
+            : commandTimeoutMs;
+          total += own;
+          if (total >= COMMAND_TIMEOUT_CEILING_MS) {
+            total = COMMAND_TIMEOUT_CEILING_MS;
+            break;
+          }
+        }
+        budget = Math.min(COMMAND_TIMEOUT_CEILING_MS, total + QUEUE_MARGIN_MS);
+      }
+      return await request(action, payload, budget);
     },
   });
 }
