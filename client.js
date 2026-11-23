@@ -1098,7 +1098,17 @@ window.__ModuleLoader__.load({
               result: result,
             };
             session.steps.push(step);
-            return { ok: true, value: { step: step, sessionSteps: session.steps.length, origin: session.origin } };
+            const stepErrors = errors.filter(function (entry) { return entry.at >= started; });
+            return {
+              ok: true,
+              value: {
+                step: step,
+                errors: stepErrors.slice(-10),
+                errorSummary: summarizeErrors(started),
+                sessionSteps: session.steps.length,
+                origin: session.origin,
+              },
+            };
           }
           if (pending.action === 'run') {
             // The conversation hands over the whole checklist once; the client
@@ -1146,6 +1156,12 @@ window.__ModuleLoader__.load({
                 failed: failed,
                 stoppedEarly: executed.length < queue.length,
                 lastError: lastError,
+                // Console noise raised while the queue ran travels with the
+                // result, so one call answers "what happened" without a follow-up.
+                errors: errors
+                  .filter(function (entry) { return entry.at >= queueStarted; })
+                  .slice(-20),
+                errorSummary: summarizeErrors(queueStarted),
                 elapsedMs: Date.now() - queueStarted,
                 sessionSteps: session.steps.length,
                 origin: session.origin,
@@ -1160,7 +1176,17 @@ window.__ModuleLoader__.load({
             if (!opened.ok) return { ok: true, value: opened };
             const report = await runAct({ kind: 'audit', selector: args.selector, text: args.text, limit: args.limit });
             const ended = await finishSession({ auto: true, reason: 'peek' });
-            return { ok: true, value: { opened: opened.opened, audit: report, restored: ended.restored, snapshot: ended.snapshot } };
+            return {
+              ok: true,
+              value: {
+                opened: opened.opened,
+                audit: report,
+                restored: ended.restored,
+                snapshot: ended.snapshot,
+                errors: ended.errors,
+                errorSummary: ended.errorSummary,
+              },
+            };
           }
           if (pending.action === 'restore-origin') {
             const persisted = readPersistedSession() || {};

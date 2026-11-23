@@ -17,13 +17,16 @@
 - 每条错误记录补三个字段：`panel`（报错那一刻屏幕上面板的标题）、`step`（会话进行到第几步）、`duringSession`（是否在会话期间）。
 - `end` 报告新增 `errorSummary`：`{ total, duringWindow, byPanel: [{ panel, count, kinds }] }`。
 - `errors` 动作支持两个过滤参数：`sinceSession`（只看本次会话开始之后的）和 `panel`（只看标题包含该文字的面板），并返回同一份 `byPanel` 计数。
+- **报错放进统一返回**：`run`、`act`、`peek` 的返回值里直接带本次窗口内的 `errors` 与 `errorSummary`，不需要再补一次 `errors` 调用——一次调用就回答「这一步做了什么、有没有报错」。
 
 **验证**：
 
 | 场景 | 结果 |
 |---|---|
 | 会话中查询 `errors { sinceSession: true }` | 返回 `{ count: 0, total: 0, errors: [], byPanel: [] }`，新增字段就位 |
-| `end` 报告 | 含 `errorSummary: { total: 0, duringWindow: 0, byPanel: [] }` |
+| `run` 返回 | 含 `errors: []` 与 `errorSummary: { total, duringWindow, byPanel }` |
+| `act` 返回 | 同样含 `errors` 与 `errorSummary` |
+| `end` 报告 | 含 `errorSummary` |
 
 本次没有真实报错发生，所以 `panel` 的取值路径只做了代码核对，没有实测样本——如实记录。
 
