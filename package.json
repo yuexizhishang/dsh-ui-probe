@@ -33,6 +33,7 @@
     "client.js",
     "cordis.patch.yml",
     "icon.svg",
+    "CHANGELOG.md",
     "locale/*.json"
   ],
   "publishConfig": {

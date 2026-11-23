@@ -30,6 +30,8 @@ const REQUEST_TIMEOUT_MS = 30000;
 // Each command inside a page request gets its own budget; a queue of slow steps
 // must not be cut off by the plain request timeout. The conversation may raise
 // it per call (commandTimeoutMs) when a feature legitimately needs longer.
+// These two values must stay equal to the client half's constants of the same
+// name (client.js): both sides compute the same per-command budget.
 const DEFAULT_COMMAND_TIMEOUT_MS = 90000;
 const COMMAND_TIMEOUT_CEILING_MS = 600000;
 const QUEUE_MARGIN_MS = 15000;
@@ -585,7 +587,8 @@ export function apply(ctx) {
             },
             within: {
               type: 'string',
-              description: 'CSS selector limiting a text search to one container (click/waitFor/audit/type), so chat text with the same wording cannot win.',
+              description:
+                'CSS selector limiting a text search to one container (click/waitFor/audit/type), so a label that also appears in the transcript or chat text with the same wording cannot win.',
             },
             value: { type: 'string', description: 'Value to write for kind "type".' },
             key: { type: 'string', description: 'Key to press for kind "key", for example Enter, Escape, Backspace.' },
@@ -599,11 +602,6 @@ export function apply(ctx) {
             settleMs: { type: 'number', description: 'Wait after the step before reporting. Defaults to 300.' },
             timeoutMs: { type: 'number', description: 'Timeout for kind "waitFor". Defaults to 5000, at most 30000.' },
             limit: { type: 'integer', description: 'Maximum matches to consider. Defaults to 20.' },
-            within: {
-              type: 'string',
-              description:
-                'CSS selector limiting a text search to one container, so a label that also appears in the transcript resolves to the control instead.',
-            },
           },
           required: ['kind'],
           additionalProperties: false,

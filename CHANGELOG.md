@@ -6,6 +6,27 @@
 
 ## 未发布（计划 1.1.0）
 
+### 清理 — 重复键、npm 文件、注释与措辞（2026-11-23）
+
+状态：纯清理，无行为变化。
+
+**改动**：
+
+- `index.js`：删掉 act 参数里**重复定义的 `within`**（第二处静默覆盖第一处，前段描述从没生效）；合并为一条说明。`within` 现在只剩 act 与 steps 各一处。
+- `package.json`：`files` 补 `CHANGELOG.md`，npm 用户也能看到更新记录。
+- 两侧超时常量（`DEFAULT_COMMAND_TIMEOUT_MS` / `COMMAND_TIMEOUT_CEILING_MS`）各加一句「必须与对端一致」的注释，避免将来只改一边。
+- README「已知限制」首行改为「不知道面板 id 时自动切面板」，与阶段 6 之后的实际行为一致。
+- `.gitignore`：删掉 `.shots/`、`acl-recovery/` 两个早期实验遗留条目。
+
+**验证**：
+
+| 项 | 结果 |
+|---|---|
+| `node --check` client.js / index.js | 均通过 |
+| `check-bundle.mjs` | 0 error / 0 warning |
+| `within` 定义数量 | 2（act + steps），此前为 3 |
+| `package.json` 解析与 `files` | 正常，含 CHANGELOG.md |
+
 ### 阶段 6 — 按面板 id 切换、侧栏按 aria-label 打开、点击只落控件（2026-11-23）
 
 状态：已实现并实机验证（0.2.2-rc.3，Electron 44.7.0）。

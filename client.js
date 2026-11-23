@@ -448,6 +448,8 @@ window.__ModuleLoader__.load({
     // Each command runs under its own budget. The session's idle timer must not
     // cancel a queue that is still working, and a stuck command has to fail with
     // a nameable reason instead of hanging the whole request.
+    // Must stay equal to the Host constants of the same name in index.js: both
+    // sides compute the same per-command budget.
     const DEFAULT_COMMAND_TIMEOUT_MS = 90000;
     const COMMAND_TIMEOUT_CEILING_MS = 600000;
 
