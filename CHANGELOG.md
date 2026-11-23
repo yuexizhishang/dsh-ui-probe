@@ -6,6 +6,32 @@
 
 ## 未发布（计划 1.1.0）
 
+### 设置页检查更新加 npm 回退，工具描述压缩（2026-11-23）
+
+状态：已实现；GitHub 主路径实测通过，**npm 回退分支未触发**（当前 GitHub 可达）。
+
+**问题**：
+
+- 设置页「检查更新」只读 `api.github.com`。该接口未认证时按 IP 限流 60 次/小时，超限直接 403，用户看到的是"读不到远端版本"，很像插件坏了。
+- `ui_page` 的工具描述 1828 字符，每次调用都随 schema 带给模型，属于固定成本。
+
+**改动**：
+
+- `selfCheck()` 改为双源：先 GitHub（commit + `package.json`），失败回退 `registry.npmjs.org/<包名>/latest` 读 `version`。新增 `source`（`github` / `npm`）、`canUpdate`、`updateNote` 字段；两个来源都失败才返回 `ok:false`，错误里分别写明两边的原因。
+- 更新仍只走 GitHub：npm-only 时**能检查但不能安装**（`skipped: true, reason: 'update needs GitHub'`），避免把本地开发安装（junction）替换成 npm 包。
+- 工具描述压到 1324 字符（−28%），保留动作集合、`ref`、控件判定、`effect`、`panelSource`、off-limits、空闲自动返回；流程性内容留在技能文本里。
+
+**验证**：
+
+| 项 | 结果 |
+|---|---|
+| 直接 `POST /dsh-ui-probe/self {action:"check"}` | `ok:true`，local/remote 均 `1.0.0`，`source:"github"`，`upToDate:true`，`canUpdate:true` |
+| 运行中的 `ui_page` 描述（`Tool.listTools`） | 1355 字符（JSON 转义形态），含 `openPanel` / `effect` / `panelSource` |
+| npm 端点（Node 直连） | HTTP 200，`version: 1.0.0` |
+| 回退分支 | 未触发，如实记录 |
+
+**兼容性**：`/self` 只新增字段，客户端读取的字段不变；安装更新语义收紧（npm-only 时不允许更新），见上。
+
 ### 清理 — 重复键、npm 文件、注释与措辞（2026-11-23）
 
 状态：纯清理，无行为变化。

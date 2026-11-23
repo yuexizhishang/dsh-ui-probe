@@ -256,6 +256,21 @@ export function apply(ctx) {
     return manager;
   }
 
+  // Fallback version source: the npm registry answers without auth and without
+  // the per-IP rate limit GitHub applies (60 requests/hour unauthenticated).
+  async function npmLatestVersion() {
+    const url = 'https://registry.npmjs.org/' + encodeURIComponent(SELF_NAME) + '/latest';
+    const response = await fetch(url, {
+      headers: { 'user-agent': 'dsh-ui-probe', accept: 'application/json' },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!response.ok) throw new Error('HTTP ' + response.status + ' from ' + url);
+    const manifest = await response.json();
+    const version = manifest && manifest.version;
+    if (!version) throw new Error('npm registry 返回里没有 version');
+    return { version: String(version), tarball: (manifest.dist && manifest.dist.tarball) || null };
+  }
+
   // Read the published state of this package. The comparison key is package.json's
   // version: pushing code without bumping it is not a new release.
   async function selfCheck() {
@@ -264,6 +279,7 @@ export function apply(ctx) {
       ok: true,
       local: local,
       remote: null,
+      source: null,
       sha: null,
       upToDate: null,
       commitMessage: null,
@@ -272,6 +288,7 @@ export function apply(ctx) {
       ref: GITHUB_REF,
       checkedAt: Date.now(),
     };
+    let githubError = null;
     try {
       const commit = await fetchJson('https://api.github.com/repos/' + GITHUB_REPO + '/commits/' + GITHUB_REF);
       info.sha = (commit && commit.sha) || null;
@@ -279,43 +296,64 @@ export function apply(ctx) {
       info.commitMessage = String(head).split('\n')[0].slice(0, 160);
       info.committedAt = (commit && commit.commit && commit.commit.committer && commit.commit.committer.date) || null;
     } catch (error) {
+      githubError = (error && error.message) || String(error);
+    }
+    // Read package.json through the REST API: raw.githubusercontent.com is unreachable
+    // on many networks (and on some it is blocked outright), while api.github.com works.
+    if (info.sha) {
+      try {
+        const url =
+          'https://api.github.com/repos/' + GITHUB_REPO + '/contents/package.json' +
+          '?ref=' + encodeURIComponent(info.sha);
+        const response = await fetch(url, {
+          headers: { 'user-agent': 'dsh-ui-probe', accept: 'application/vnd.github.raw' },
+          signal: AbortSignal.timeout(15000),
+        });
+        if (!response.ok) throw new Error('HTTP ' + response.status + ' from ' + url);
+        const text = await response.text();
+        let manifest = null;
+        try {
+          manifest = JSON.parse(text);
+        } catch (ignored) {
+          manifest = null;
+        }
+        // Without the raw media type the API answers with base64 content instead.
+        if (manifest && typeof manifest === 'object' && typeof manifest.content === 'string' && !manifest.version) {
+          manifest = JSON.parse(Buffer.from(manifest.content, 'base64').toString('utf8'));
+        }
+        info.remote = (manifest && manifest.version) || null;
+        if (info.remote) info.source = 'github';
+        else info.remoteError = '远端 package.json 里没有 version 字段';
+      } catch (error) {
+        info.remoteError = (error && error.message) || String(error);
+      }
+    }
+    if (!info.remote) {
+      try {
+        const latest = await npmLatestVersion();
+        info.remote = latest.version;
+        info.source = 'npm';
+        info.npmTarball = latest.tarball;
+      } catch (error) {
+        info.npmError = (error && error.message) || String(error);
+      }
+    }
+    if (!info.remote) {
       return {
         ok: false,
         local: local,
         repo: GITHUB_REPO,
-        error: 'GitHub API: ' + ((error && error.message) || String(error)),
-        hint: '仓库尚未推送或当前网络不可达 GitHub',
+        source: null,
+        error: 'GitHub: ' + (githubError || info.remoteError || '版本未知') + ' / npm: ' + (info.npmError || '版本未知'),
+        hint: '两个来源都读不到版本：检查网络，或确认仓库已推送、包已发布到 npm',
       };
     }
-    // Read package.json through the REST API: raw.githubusercontent.com is unreachable
-    // on many networks (and on some it is blocked outright), while api.github.com works.
-    try {
-      const url =
-        'https://api.github.com/repos/' + GITHUB_REPO + '/contents/package.json' +
-        (info.sha ? '?ref=' + encodeURIComponent(info.sha) : '');
-      const response = await fetch(url, {
-        headers: { 'user-agent': 'dsh-ui-probe', accept: 'application/vnd.github.raw' },
-        signal: AbortSignal.timeout(15000),
-      });
-      if (!response.ok) throw new Error('HTTP ' + response.status + ' from ' + url);
-      const text = await response.text();
-      let manifest = null;
-      try {
-        manifest = JSON.parse(text);
-      } catch (ignored) {
-        manifest = null;
-      }
-      // Without the raw media type the API answers with base64 content instead.
-      if (manifest && typeof manifest === 'object' && typeof manifest.content === 'string' && !manifest.version) {
-        manifest = JSON.parse(Buffer.from(manifest.content, 'base64').toString('utf8'));
-      }
-      info.remote = (manifest && manifest.version) || null;
-      if (!info.remote) info.remoteError = '远端 package.json 里没有 version 字段';
-    } catch (error) {
-      info.remoteError = (error && error.message) || String(error);
-    }
-    info.remoteKnown = Boolean(info.remote);
-    if (info.remote) info.upToDate = compareVersion(local, info.remote) >= 0;
+    info.remoteKnown = true;
+    info.upToDate = compareVersion(local, info.remote) >= 0;
+    // Installing an update still needs GitHub (commit sha); an npm-only answer can
+    // check the version but cannot fetch the package with this profile's manager.
+    info.canUpdate = info.source === 'github' && Boolean(info.sha);
+    if (!info.canUpdate) info.updateNote = '能检查版本，但更新需要 GitHub 可达';
     return info;
   }
 
@@ -334,6 +372,15 @@ export function apply(ctx) {
     }
     if (check.upToDate) {
       return { ok: true, skipped: true, reason: 'already up to date', check: check };
+    }
+    if (check.canUpdate === false) {
+      return {
+        ok: false,
+        skipped: true,
+        reason: 'update needs GitHub',
+        error: check.updateNote || '更新需要 GitHub 可达',
+        check: check,
+      };
     }
     const ref = sha || check.sha;
     const spec = 'github:' + GITHUB_REPO + (ref ? '#' + ref : '');
@@ -538,7 +585,7 @@ export function apply(ctx) {
   register({
     name: 'ui_page',
     description:
-      'A local visual acceptance tool for DSH plugin pages. A session: "begin" opens the target panel (pass "openPanel" with a panel id to switch through the shell, "openText" to press a sidebar entry by its label, or neither to verify in place) and remembers the conversation it came from; "act" performs one step (click / waitFor / audit / snapshot / wait / type / key) and records it in a timeline; "run" executes an entire queue of steps in one call and answers with every step plus a summary; "end" returns that timeline and goes back to the conversation. A snapshot hands out refs ("e5"); target them with { ref: "e5" } when two controls share a label. A text click only lands on a control: the nearest button/role/tabindex ancestor is clicked, and a text match with no control answers ok:false with candidates instead of clicking nothing. Every step reports timing (totalMs, interactionMs = click → next frame, waitedMs for waitFor, the long tasks it caused); a click also reports its "effect" — DOM mutations, added/removed nodes, focus, scroll, title and url changes — so "nothing happened" is visible. Errors come back with act/run/peek and carry the panel they fired in plus "panelSource" (how that panel was identified). Use waitFor to observe effects that arrive later, and interleave the plugin\'s own tools between acts to confirm the visual UI reflects them. OFF-LIMITS: settings, account, balance, recharge, and the account menu are never automated. Actions there are refused, and a click that opens the settings panel is closed again immediately and reported as a refusal. The session also ends by itself after 30s without an act and puts the page back after a reload. Read-only actions (audit/find/outline/info/errors) never change what the user is looking at; "peek" is the quick open-read-return shortcut.',
+      'A visual acceptance tool for DSH plugin pages. Session actions: "begin" opens a panel — "openPanel" takes a panel id and switches through the shell without clicking, "openText" presses the sidebar entry with that exact aria-label, neither verifies in place — and remembers the conversation to return to; "act" performs one step (click / waitFor / audit / snapshot / wait / type / key); "run" executes a whole step queue in one call and answers with every step plus a summary; "end" returns the timeline and goes back; "peek" opens, reads one target and returns. A snapshot hands out refs ("e5") for controls that share a label; a text click only lands on a control and answers ok:false with candidates otherwise. Every step reports totalMs, interactionMs (click → next frame), waitedMs and the long tasks it caused; a click also reports its "effect" (DOM mutations, focus, scroll, title, url), so "nothing happened" is visible. Errors come back with act/run/peek and carry the panel they fired in plus "panelSource". OFF-LIMITS: settings, account, balance, recharge and the account menu are never automated; a click that opens them is undone and reported as refused. The session ends by itself after 30 s idle and restores the page after a reload. Read-only: audit / find / outline / info / errors / restore-origin.',
     parameters: {
       type: 'object',
       properties: {
