@@ -119,6 +119,59 @@ window.__ModuleLoader__.load({
       };
     }
 
+    // "Did the click change anything?" as counts rather than a verdict: DOM
+    // mutations, focus, scroll, title and url around the interaction. A click
+    // that reports success but changes nothing is visible in these numbers.
+    function watchMutations(element) {
+      const beforeFocus = document.activeElement;
+      const beforeTitle = document.title;
+      const beforeUrl = location.href;
+      const beforeScroll = scrollTopOf(element);
+      let mutations = 0;
+      let added = 0;
+      let removed = 0;
+      const observer = typeof MutationObserver === 'function' && document.body
+        ? new MutationObserver(function (records) {
+          mutations += records.length;
+          for (const record of records) {
+            if (record.addedNodes) added += record.addedNodes.length;
+            if (record.removedNodes) removed += record.removedNodes.length;
+          }
+        })
+        : null;
+      if (observer) {
+        observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+      }
+      return function finish() {
+        if (observer) observer.disconnect();
+        const active = document.activeElement;
+        return {
+          mutations: mutations,
+          nodesAdded: added,
+          nodesRemoved: removed,
+          focusChanged: active !== beforeFocus,
+          focus: active ? describe(active) : null,
+          focusText: active ? textOf(active, 40) : '',
+          scrollChanged: scrollTopOf(element) !== beforeScroll,
+          titleChanged: document.title !== beforeTitle,
+          urlChanged: location.href !== beforeUrl,
+        };
+      };
+    }
+
+    // Nearest scrollable ancestor of the element, or the page offset when there
+    // is none: the one number that says "the view moved".
+    function scrollTopOf(element) {
+      let node = element && element.parentElement;
+      while (node && node !== document.documentElement) {
+        if (node.scrollHeight > node.clientHeight + 1 && /(auto|scroll)/.test(window.getComputedStyle(node).overflowY)) {
+          return Math.round(node.scrollTop);
+        }
+        node = node.parentElement;
+      }
+      return Math.round(window.scrollY);
+    }
+
     function outline(target, limit) {
       if (!target.length) return { found: 0 };
       const walk = function (element, depth) {
@@ -678,26 +731,36 @@ window.__ModuleLoader__.load({
 
     // Which panel was on screen when an error fired. Errors are global to the
     // page, so without this every unrelated plugin's failure looks like ours.
-    function panelLabel() {
-      const title = document.querySelector('[class*="panelTitle"]');
-      if (title) {
-        const text = textOf(title, 40);
-        if (text) return text;
-      }
-      const heading = document.querySelector('h1, h2, h3');
-      if (heading) {
-        const text = textOf(heading, 40);
-        if (text) return text;
-      }
-      return null;
+    // Which panel is on screen, and how that was decided. The first version took
+    // the first [class*="panelTitle"] in the document, which is a sidebar entry:
+    // measured on 0.2.2-rc.3 it reported "插件" while 像素工坊 was open. The
+    // decision source now travels with the name so the reader can weigh it.
+    function panelInfo() {
+      if (hasComposer()) return { title: null, source: 'conversation' };
+      const inNav = function (element) {
+        return Boolean(element.closest('aside, nav, [role="navigation"]'));
+      };
+      const headings = Array.from(document.querySelectorAll('h1, h2, h3')).filter(function (element) {
+        return isRendered(element) && !inNav(element);
+      });
+      if (headings.length) return { title: textOf(headings[0], 40), source: 'heading' };
+      const titled = Array.from(document.querySelectorAll('[class*="panelTitle"]')).filter(function (element) {
+        return isRendered(element) && !inNav(element);
+      });
+      if (titled.length) return { title: textOf(titled[0], 40), source: 'class:panelTitle' };
+      const docTitle = String(document.title || '').split(/[—|]/)[0].trim();
+      if (docTitle) return { title: docTitle, source: 'document.title' };
+      return { title: null, source: null };
     }
 
     function recordError(kind, detail) {
+      const panel = panelInfo();
       errors.push({
         kind: kind,
         detail: String(detail).slice(0, 600),
         at: Date.now(),
-        panel: panelLabel(),
+        panel: panel.title,
+        panelSource: panel.source,
         step: session ? session.steps.length + 1 : null,
         duringSession: Boolean(session),
       });
@@ -712,7 +775,7 @@ window.__ModuleLoader__.load({
       });
       const byPanel = new Map();
       for (const entry of during) {
-        const key = entry.panel || '(unknown panel)';
+        const key = entry.panel || (entry.panelSource === 'conversation' ? '(conversation)' : '(unknown panel)');
         const bucket = byPanel.get(key) || { panel: key, count: 0, kinds: {} };
         bucket.count += 1;
         bucket.kinds[entry.kind] = (bucket.kinds[entry.kind] || 0) + 1;
@@ -916,6 +979,7 @@ window.__ModuleLoader__.load({
         }
         const settingsWereOpen = settingsOpen();
         const menuWasOpen = accountMenuOpen();
+        const effectWatch = watchMutations(target[0]);
         clickElement(target[0], a.clickOnly === true);
         // Event handler → rendered frame: the number a user feels as "响应快不快".
         const frameStart = performance.now();
@@ -923,6 +987,7 @@ window.__ModuleLoader__.load({
         const interactionMs = round1(performance.now() - frameStart);
         refsDirty = true;
         await sleep(a.settleMs || DEFAULT_SETTLE);
+        const effect = effectWatch();
         // Safety net: a click that opens the settings panel is treated as a refusal
         // and the panel is closed immediately, before anything can be read there.
         if (!settingsWereOpen && settingsOpen()) {
@@ -948,7 +1013,7 @@ window.__ModuleLoader__.load({
             snapshot: snapshot(),
           };
         }
-        return { ok: true, clicked: describe(target[0]), ref: refByElement.get(target[0]) || null, rect: rectOf(target[0]), interactionMs: interactionMs, snapshot: snapshot() };
+        return { ok: true, clicked: describe(target[0]), ref: refByElement.get(target[0]) || null, rect: rectOf(target[0]), interactionMs: interactionMs, effect: effect, snapshot: snapshot() };
       }
       if (a.kind === 'waitFor') return await waitForTarget(a);
       if (a.kind === 'audit') {
@@ -1006,6 +1071,17 @@ window.__ModuleLoader__.load({
           recordError('unhandledrejection', (reason && (reason.stack || reason.message)) || reason);
         };
         const originalConsoleError = console.error;
+        // Resource failures (img / script / link / media) never reach the bubble
+        // listener above; they only fire in the capture phase on the element.
+        const onResourceError = function (event) {
+          const target = event && event.target;
+          if (!target || typeof target.tagName !== 'string') return;
+          const tag = target.tagName.toLowerCase();
+          if (['img', 'script', 'link', 'video', 'audio', 'source', 'track', 'iframe'].indexOf(tag) === -1) return;
+          const url = target.currentSrc || target.src || target.href || '';
+          recordError('resource.' + tag, String(url || '(no url)').slice(0, 300));
+        };
+        window.addEventListener('error', onResourceError, true);
         console.error = function () {
           try {
             recordError('console.error', Array.prototype.map.call(arguments, String).join(' '));
@@ -1071,7 +1147,7 @@ window.__ModuleLoader__.load({
         async function handle(pending) {
           const args = pending.args || {};
           if (pending.action === 'info') {
-            return { ok: true, value: { title: document.title, url: location.href, viewport: { width: window.innerWidth, height: window.innerHeight }, theme: document.documentElement.getAttribute('data-theme') || null, bodyClass: document.body.className, session: session ? { origin: session.origin, steps: session.steps.length } : null, lastEnd: readLastEnd() } };
+            return { ok: true, value: { title: document.title, panel: panelInfo(), url: location.href, viewport: { width: window.innerWidth, height: window.innerHeight }, theme: document.documentElement.getAttribute('data-theme') || null, bodyClass: document.body.className, session: session ? { origin: session.origin, steps: session.steps.length } : null, lastEnd: readLastEnd() } };
           }
           if (pending.action === 'errors') {
             const limit = args.limit || 20;
@@ -1591,6 +1667,7 @@ window.__ModuleLoader__.load({
             if (controller) controller.abort();
             document.removeEventListener('visibilitychange', onVisibility);
             window.removeEventListener('error', onError);
+            window.removeEventListener('error', onResourceError, true);
             window.removeEventListener('unhandledrejection', onRejection);
             console.error = originalConsoleError;
           };

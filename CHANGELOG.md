@@ -6,6 +6,35 @@
 
 ## 未发布（计划 1.1.0）
 
+### 阶段 5 — 点击有没有反应、报错归因来源、资源加载失败（2026-11-23）
+
+状态：点击变化摘要与报错归因**已实机验证**；资源加载失败监听已实现，本次没有可触发的失败资源，**未实测**。
+
+**问题**（三处都是"看到的现象与真实情况不一致"）：
+
+- `click` 只回元素信息。点了没反应、或误点到别的元素，都返回 `ok: true`：实测三次误点（侧栏标题里的 `span`、正文 `<p>`、已激活的 tab）全部报告成功，只能靠人肉比对快照才发现。
+- 报错归因取 `[class*="panelTitle"]` 的第一个匹配。实测打开「像素工坊」时它取到的是**侧栏条目**，文本是「插件」——归因直接是错的。
+- `img` / `script` / `link` 的加载失败不冒泡，现有的 `window` `error` 监听（冒泡阶段）收不到。
+
+**改动**（只加事实）：
+
+- `click` 结果新增 `effect`：`mutations` / `nodesAdded` / `nodesRemoved` / `focusChanged` / `focus` / `focusText` / `scrollChanged` / `titleChanged` / `urlChanged`。点击前后用 `MutationObserver` 计数，只统计不改判。
+- `panelLabel()` 换成 `panelInfo()`：优先可见标题（排除 `aside` / `nav` 里的侧栏条目），其次面板内的 `panelTitle`，最后 `document.title`；每条报错带 `panelSource`，`info` 动作也返回当前 `panel` 与来源。
+- 新增捕获阶段 `error` 监听：记录 `resource.img` / `resource.script` / `resource.link` 等类型与地址（截 300 字）。
+
+**验证**（0.2.2-rc.3）：
+
+| 场景 | 结果 |
+|---|---|
+| `info`（对话中） | `panel: { title: null, source: "conversation" }` |
+| `info`（打开像素工坊） | `panel: { title: "像素工坊", source: "heading" }` |
+| `info`（切到人设工坊） | `panel: { title: "人设工坊", source: "heading" }` |
+| 点击侧栏「人设工坊」 | `effect: { mutations: 6, nodesAdded: 4, nodesRemoved: 2 }`，快照标题随之变成「人设工坊」 |
+| 误点侧栏标题 `span` / 正文 `<p>` / 已激活 tab | `effect` 全为 0——误点在第一次返回里就能看出来 |
+| 资源加载失败 | 未触发到失败资源，**未实测** |
+
+**兼容性**：只加字段，不改既有字段语义；`errors[].panel` 在对话里由侧栏文本变成 `null`（并用 `panelSource: "conversation"` 标明）。
+
 ### 文档 — README 补齐新增能力（2026-11-23）
 
 状态：纯文案改动，不涉及行为。依据是代码与已记录的实测结果，没有新增未验证的说法。
