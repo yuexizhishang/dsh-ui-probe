@@ -6,6 +6,29 @@
 
 ## 未发布（计划 1.1.0）
 
+### 仓库整理与自带自检（2026-11-23）
+
+状态：完成。
+
+**问题**：
+
+- 本地留着一条 `backup/history` 分支。它建于 2026-11-03，2026-11-04 发布 1.0.0 时公开历史被换成另一条线，于是它成了一条旧血统（ahead 9 / behind 10），且 `main` 没有 upstream。
+- 静态校验一直靠工作区的 `plugin-kit/tools/check-bundle.mjs`，插件仓库自身没有入口：别人 clone 后不知道怎么自检，发布前也容易漏跑。
+
+**改动**：
+
+- 旧血统先归档成标签 `backup/2026-11-03`（指向 `7ff18b5`），再删除 `backup/history` 分支；`main` 绑定 `origin/main`。今后推送时用 `git push -u origin main` 即可，公开历史只追加、不重写。
+- 新增 `scripts/check.mjs` 与 `npm run check`：**28 项**零依赖检查——manifest 合法性、patch 指向与插入行名一致、`apply` 导出唯一、factory id 与包名一致、图标类型与 256 KiB 上限、locale 可解析且有 `meta.title`、`files` 覆盖必需文件且路径存在。
+- 该脚本只放在仓库里（`files` 不含 `scripts/`），不随 npm 包分发；npm 用户不需要它。
+
+**验证**：
+
+| 项 | 结果 |
+|---|---|
+| `node scripts/check.mjs` | 28 checks，0 error，退出码 0 |
+| 故意把 `package.json` 写坏 | 退出码 1（能报错） |
+| `git branch -vv` | `main [origin/main: ahead 12]`，旧分支已删，tag `backup/2026-11-03` 在 |
+
 ### 设置页检查更新加 npm 回退，工具描述压缩（2026-11-23）
 
 状态：已实现；GitHub 主路径实测通过，**npm 回退分支未触发**（当前 GitHub 可达）。

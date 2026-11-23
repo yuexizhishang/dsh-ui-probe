@@ -39,6 +39,9 @@
   "publishConfig": {
     "access": "public"
   },
+  "scripts": {
+    "check": "node scripts/check.mjs"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
