@@ -1454,7 +1454,7 @@ window.__ModuleLoader__.load({
           if (pending.action === 'peek') {
             const opened = await beginSession(args);
             if (!opened.ok) return { ok: true, value: opened };
-            const report = await runAct({ kind: 'audit', selector: args.selector, text: args.text, limit: args.limit });
+            const report = await runAct({ kind: 'audit', selector: args.selector, text: args.text, ref: args.ref, limit: args.limit });
             const ended = await finishSession({ auto: true, reason: 'peek' });
             return {
               ok: true,

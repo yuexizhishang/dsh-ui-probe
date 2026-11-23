@@ -6,6 +6,29 @@
 
 ## 未发布（计划 1.1.0）
 
+### 更新记录校对与 peek ref 修复（2026-11-23）
+
+状态：完成；`peek` 的 ref 支持已实测。
+
+**校对（只改记录，不改行为）**：
+
+- 推送说明改成与现状一致：`main` 已绑定 `origin/main`，推送用 `git push origin main --tags`，并写明**标签不会随普通 push 上传**。
+- 验证表里的 `ahead 12` 改为"该次提交时领先 12"，避免与后续提交数不符。
+- 阶段 3 的 `panel` 字段状态更新为"截至 2026-11-23 仍无真实报错样本"，阶段 5 的 `panelSource` 同样待样本。
+- 去掉文档段落与阶段 4 之间孤立的分隔线，补一条「约定 — 插件只采证，判断归对话」记录设计边界的引入时间。
+
+**代码核对时发现并修复的问题**：
+
+- `peek` 的 `audit` 调用只传了 `selector` / `text`，**漏传 `ref`**——与阶段 1 的记录、以及工具 schema 里"`ref` 可用于 audit/outline/peek"的说明都不符。按 ref 调 `peek` 会退化成"找不到目标"。修复为一行：把 `ref` 一并传给 `runAct`。
+
+**验证**：
+
+| 项 | 结果 |
+|---|---|
+| `node --check client.js` | 通过 |
+| `peek { openPanel: "pixel-forge", ref: "e11" }` | `opened: pixel-forge`，`audit.found: 1`（侧栏按钮，`aria-label=像素工坊`），`restored.via: layout.selectPanel + row`，`backInConversation: true` |
+| 记录与代码逐项对照 | 阶段 1–6、清理、设置页回退的字段与行为均能在代码里找到对应实现 |
+
 ### 仓库整理与自带自检（2026-11-23）
 
 状态：完成。
@@ -17,7 +40,7 @@
 
 **改动**：
 
-- 旧血统先归档成标签 `backup/2026-11-03`（指向 `7ff18b5`），再删除 `backup/history` 分支；`main` 绑定 `origin/main`。今后推送时用 `git push -u origin main` 即可，公开历史只追加、不重写。
+- 旧血统先归档成标签 `backup/2026-11-03`（指向 `7ff18b5`），再删除 `backup/history` 分支；`main` 已绑定 `origin/main`。公开历史只追加、不重写；推送时用 `git push origin main --tags`——**标签不会随普通 push 上传**，归档标签要显式推。
 - 新增 `scripts/check.mjs` 与 `npm run check`：**28 项**零依赖检查——manifest 合法性、patch 指向与插入行名一致、`apply` 导出唯一、factory id 与包名一致、图标类型与 256 KiB 上限、locale 可解析且有 `meta.title`、`files` 覆盖必需文件且路径存在。
 - 该脚本只放在仓库里（`files` 不含 `scripts/`），不随 npm 包分发；npm 用户不需要它。
 
@@ -27,7 +50,7 @@
 |---|---|
 | `node scripts/check.mjs` | 28 checks，0 error，退出码 0 |
 | 故意把 `package.json` 写坏 | 退出码 1（能报错） |
-| `git branch -vv` | `main [origin/main: ahead 12]`，旧分支已删，tag `backup/2026-11-03` 在 |
+| `git branch -vv` | `main` 跟踪 `origin/main`（该次提交时领先 12），旧分支已删，tag `backup/2026-11-03` 在 |
 
 ### 设置页检查更新加 npm 回退，工具描述压缩（2026-11-23）
 
@@ -150,8 +173,6 @@
 - 「已知限制」补两条：元素编号随页面变化失效（旧编号明确报错）、报错只能归因到面板级。
 - 安装、设置页、安全边界三节保持原样；不写实现细节与未发布版本号。
 
----
-
 ### 阶段 4 — 打开失败给候选，且只认可点击元素（2026-11-23）
 
 状态：已实现并实测。
@@ -175,7 +196,7 @@
 
 ### 阶段 3 — 控制台错误按面板归因（2026-11-23）
 
-状态：已实现；结构与过滤已实测，`panel` 字段要等下一次真实报错才能观察到取值。
+状态：已实现；结构与过滤已实测。`panel` 字段至今**仍没有真实报错样本**（截至 2026-11-23），阶段 5 新增的 `panelSource` 同样待样本。
 
 **问题**：控制台报错是页面级的，捕获时会把别的插件的失败也算进来——本工作区实测抓到过 `Sidebar Session opening failed`（来自侧栏插件），和被测插件无关，混在同一条时间线里无法区分。
 
@@ -215,6 +236,14 @@
 |---|---|
 | 40 秒队列（2×20 秒 wait + snapshot） | 3 步全部执行，`failed: 0`，`elapsedMs: 40033` |
 | `commandTimeoutMs: 2000` + 5 秒 wait | 第 1 步 `timedOut: true`、`timeoutMs: 2000`，队列停止，`lastError` 说明原因 |
+
+### 约定 — 插件只采证，判断归对话（2026-11-23）
+
+把设计边界写进本文件开头，作为后续所有阶段的前提：
+
+- 插件输出只允许事实与数值：几何、计算样式、可见性、耗时、报错、请求记录。
+- 不内置断言（无 expect / assert），不输出"合格 / 不合格 / 建议修改"。
+- 动作结果里的 `ok: false` 只表示这一步没能执行（找不到目标、超时、被安全边界拒绝），不是对界面质量的评价。
 
 ### 阶段 1 — 引用定位 / 性能时序 / 批量队列（2026-11-23）
 
