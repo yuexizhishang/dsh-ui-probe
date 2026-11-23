@@ -548,6 +548,11 @@ export function apply(ctx) {
           type: 'string',
           description: 'CSS selector of the control that opens the panel.',
         },
+        openRef: {
+          type: 'string',
+          description:
+            'Ref of the control that opens the panel (from a snapshot or from the candidates returned when openText misses).',
+        },
         settleMs: {
           type: 'number',
           description: 'How long to wait after opening before reporting the snapshot. Defaults to 300.',
@@ -680,6 +685,7 @@ export function apply(ctx) {
         restore: !(args && args.restore === false),
         openText: args && typeof args.openText === 'string' ? args.openText : '',
         openSelector: args && typeof args.openSelector === 'string' ? args.openSelector : '',
+        openRef: args && typeof args.openRef === 'string' ? args.openRef : '',
         settleMs: args && Number.isFinite(args.settleMs) ? Math.max(0, Math.min(10000, args.settleMs)) : 300,
         act: args && args.act && typeof args.act === 'object' ? args.act : null,
         // The queue for action "run": each entry is one act object. Capped so a

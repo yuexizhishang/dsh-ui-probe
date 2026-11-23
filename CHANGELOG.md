@@ -6,6 +6,27 @@
 
 ## 未发布（计划 1.1.0）
 
+### 阶段 4 — 打开失败给候选，且只认可点击元素（2026-11-23）
+
+状态：已实现并实测。
+
+**问题一**：`begin` 的名字写错只回 `opener not found: <名字>`，没有别的信息。模型只能再花一次 `snapshot` 去探，或者误判“面板不存在”。
+
+**问题二**（测试时发现，比问题一严重）：名字在聊天记录里出现过时，`resolveTarget` 会匹配到正文里的 `span`，于是点击一个不可点元素、什么都没打开，却返回 `ok: true, opened: "span._text_…"`。**假成功**。
+
+**改动**：
+
+- opener 必须是真正的控件（`button` / `a[href]` / `summary` / `role=button|tab|menuitem|treeitem|option` / 按钮型 input）。先前版本用 `[tabindex]` 兜底，会让滚动容器也通过，已去掉。
+- 找不到时返回事实清单：`candidates`（最多 24 条，含 `ref` / `role` / `text`）、`candidateCount`、以及一句 `hint`。
+- 新增 `openRef`：可以直接用候选里的 `ref` 打开，不必再猜文字。
+
+**验证**：
+
+| 场景 | 结果 |
+|---|---|
+| `openText: "QWERTY不存在的面板"` | `ok: false` + 24 条候选（`e6 插件`、`e11 像素工坊`…）+ `candidateCount: 58` |
+| 修复前同场景 | 匹配到正文 `span` 并返回 `ok: true`（假成功） |
+
 ### 阶段 3 — 控制台错误按面板归因（2026-11-23）
 
 状态：已实现；结构与过滤已实测，`panel` 字段要等下一次真实报错才能观察到取值。

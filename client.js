@@ -833,12 +833,37 @@ window.__ModuleLoader__.load({
       if (session) return { ok: false, error: 'a verification session is already open; call end first' };
       // No opener means "verify in place": useful when the effect to check is in
       // the conversation itself (typing, a chat row, a toast).
-      const wantsOpen = Boolean(String(args.openText || '').trim() || String(args.openSelector || '').trim());
+      const wantsOpen = Boolean(
+        String(args.openText || '').trim() || String(args.openSelector || '').trim() || String(args.openRef || '').trim(),
+      );
+      // An opener has to be a real control. Matching a text span in the
+      // transcript would "open" nothing and still report success, and a loose
+      // [tabindex] match lets scroll containers pass as controls.
+      const CLICKABLE = 'button, a[href], summary, [role="button"], [role="tab"], [role="menuitem"], [role="treeitem"], [role="option"], input[type="button"], input[type="submit"]';
       const opener = wantsOpen
-        ? resolveTarget({ selector: args.openSelector || '', text: args.openText || '', limit: 20 })
+        ? resolveTarget({
+          selector: args.openSelector || '',
+          text: args.openText || '',
+          ref: args.openRef || '',
+          limit: 20,
+        }).filter(function (element) {
+          return element.matches(CLICKABLE) || Boolean(element.closest(CLICKABLE));
+        })
         : [];
       if (wantsOpen && !opener.length) {
-        return { ok: false, error: 'opener not found: ' + (args.openText || args.openSelector || '(none)') };
+        // A wrong name is the caller's mistake, not a missing panel: hand back
+        // what is actually openable so the next call can hit it in one try.
+        const openable = refItems(60).filter(function (item) {
+          if (!item.text) return false;
+          return ['button', 'tab', 'link', 'menuitem', 'treeitem', 'option'].indexOf(item.role) >= 0;
+        });
+        return {
+          ok: false,
+          error: 'opener not found: ' + (args.openText || args.openSelector || '(none)'),
+          candidates: openable.slice(0, 24),
+          candidateCount: openable.length,
+          hint: 'Pick one candidate text as openText, or pass its ref as openRef.',
+        };
       }
       if (opener.length && isOffLimits(opener[0])) {
         return { ok: false, refused: 'off-limits', error: 'refused: settings, account, balance and recharge are off-limits to automation' };
