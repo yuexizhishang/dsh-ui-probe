@@ -6,6 +6,27 @@
 
 ## 未发布（计划 1.1.0）
 
+### 阶段 3 — 控制台错误按面板归因（2026-11-23）
+
+状态：已实现；结构与过滤已实测，`panel` 字段要等下一次真实报错才能观察到取值。
+
+**问题**：控制台报错是页面级的，捕获时会把别的插件的失败也算进来——本工作区实测抓到过 `Sidebar Session opening failed`（来自侧栏插件），和被测插件无关，混在同一条时间线里无法区分。
+
+**改动**（只加事实，不做判断）：
+
+- 每条错误记录补三个字段：`panel`（报错那一刻屏幕上面板的标题）、`step`（会话进行到第几步）、`duringSession`（是否在会话期间）。
+- `end` 报告新增 `errorSummary`：`{ total, duringWindow, byPanel: [{ panel, count, kinds }] }`。
+- `errors` 动作支持两个过滤参数：`sinceSession`（只看本次会话开始之后的）和 `panel`（只看标题包含该文字的面板），并返回同一份 `byPanel` 计数。
+
+**验证**：
+
+| 场景 | 结果 |
+|---|---|
+| 会话中查询 `errors { sinceSession: true }` | 返回 `{ count: 0, total: 0, errors: [], byPanel: [] }`，新增字段就位 |
+| `end` 报告 | 含 `errorSummary: { total: 0, duringWindow: 0, byPanel: [] }` |
+
+本次没有真实报错发生，所以 `panel` 的取值路径只做了代码核对，没有实测样本——如实记录。
+
 ### 阶段 2 — 命令超时与空闲计时（2026-11-23）
 
 状态：已实现并实机验证，未发布到 npm。

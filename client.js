@@ -675,9 +675,54 @@ window.__ModuleLoader__.load({
     }
 
     let errors = [];
+
+    // Which panel was on screen when an error fired. Errors are global to the
+    // page, so without this every unrelated plugin's failure looks like ours.
+    function panelLabel() {
+      const title = document.querySelector('[class*="panelTitle"]');
+      if (title) {
+        const text = textOf(title, 40);
+        if (text) return text;
+      }
+      const heading = document.querySelector('h1, h2, h3');
+      if (heading) {
+        const text = textOf(heading, 40);
+        if (text) return text;
+      }
+      return null;
+    }
+
     function recordError(kind, detail) {
-      errors.push({ kind: kind, detail: String(detail).slice(0, 600), at: Date.now() });
+      errors.push({
+        kind: kind,
+        detail: String(detail).slice(0, 600),
+        at: Date.now(),
+        panel: panelLabel(),
+        step: session ? session.steps.length + 1 : null,
+        duringSession: Boolean(session),
+      });
       if (errors.length > MAX_ERRORS) errors = errors.slice(-MAX_ERRORS);
+    }
+
+    // Counts only: the plugin reports which panel produced how many errors of
+    // which kind, and leaves the judgement to the conversation.
+    function summarizeErrors(startedAt) {
+      const during = errors.filter(function (entry) {
+        return !startedAt || entry.at >= startedAt;
+      });
+      const byPanel = new Map();
+      for (const entry of during) {
+        const key = entry.panel || '(unknown panel)';
+        const bucket = byPanel.get(key) || { panel: key, count: 0, kinds: {} };
+        bucket.count += 1;
+        bucket.kinds[entry.kind] = (bucket.kinds[entry.kind] || 0) + 1;
+        byPanel.set(key, bucket);
+      }
+      return {
+        total: errors.length,
+        duringWindow: during.length,
+        byPanel: Array.from(byPanel.values()),
+      };
     }
 
     // Open verification session, and the conversation it started from.
@@ -751,6 +796,7 @@ window.__ModuleLoader__.load({
         steps: session.steps,
         snapshot: snapshot(),
         errors: errors.slice(-10),
+        errorSummary: summarizeErrors(session.startedAt),
         auto: Boolean(info && info.auto),
         reason: (info && info.reason) || 'explicit end',
       };
@@ -1003,7 +1049,26 @@ window.__ModuleLoader__.load({
             return { ok: true, value: { title: document.title, url: location.href, viewport: { width: window.innerWidth, height: window.innerHeight }, theme: document.documentElement.getAttribute('data-theme') || null, bodyClass: document.body.className, session: session ? { origin: session.origin, steps: session.steps.length } : null, lastEnd: readLastEnd() } };
           }
           if (pending.action === 'errors') {
-            return { ok: true, value: { count: errors.length, errors: errors.slice(-(args.limit || 20)) } };
+            const limit = args.limit || 20;
+            let list = errors;
+            if (args.sinceSession && session) {
+              list = list.filter(function (entry) { return entry.at >= session.startedAt; });
+            }
+            if (args.panel) {
+              const needle = String(args.panel).toLowerCase();
+              list = list.filter(function (entry) {
+                return String(entry.panel || '').toLowerCase().indexOf(needle) >= 0;
+              });
+            }
+            return {
+              ok: true,
+              value: {
+                count: list.length,
+                total: errors.length,
+                errors: list.slice(-limit),
+                byPanel: summarizeErrors(args.sinceSession && session ? session.startedAt : 0).byPanel,
+              },
+            };
           }
           if (pending.action === 'find') {
             const matches = findByText(args.text || '', args.limit || 20);

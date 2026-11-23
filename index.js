@@ -644,6 +644,15 @@ export function apply(ctx) {
           type: 'integer',
           description: 'Maximum number of matches or children to return. Defaults to 20.',
         },
+        panel: {
+          type: 'string',
+          description:
+            'For action "errors": only errors that fired while a panel whose title contains this text was open. Every error record carries the panel it happened in, because page-wide console errors include other plugins.',
+        },
+        sinceSession: {
+          type: 'boolean',
+          description: 'For action "errors": only errors recorded after the current verification session started.',
+        },
         restore: {
           type: 'boolean',
           description: 'For "peek": navigate back afterwards. Defaults to true.',
@@ -678,6 +687,8 @@ export function apply(ctx) {
         steps: Array.isArray(args && args.steps) ? args.steps.slice(0, 200) : null,
         stopOnFail: !(args && args.stopOnFail === false),
         ref: args && typeof args.ref === 'string' ? args.ref : '',
+        panel: args && typeof args.panel === 'string' ? args.panel : '',
+        sinceSession: Boolean(args && args.sinceSession === true),
         agentSessionId: agentSessionId,
       };
       const commandTimeoutMs = args && Number.isFinite(args.commandTimeoutMs)
