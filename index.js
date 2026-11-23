@@ -524,13 +524,13 @@ export function apply(ctx) {
   register({
     name: 'ui_page',
     description:
-      'Local visual acceptance tool for DSH plugin pages. Works as a session: "begin" opens the target panel and remembers the conversation it came from, "act" performs one step (click / waitFor / audit / snapshot / wait / type / key) and records it in a timeline, "end" returns that timeline and goes back to the conversation. Use waitFor to observe effects that arrive later, and interleave the plugin\'s own tools between acts to confirm the visual UI reflects them. OFF-LIMITS: settings, account, balance, recharge, and the account menu are never automated. Actions there are refused, and a click that opens the settings panel is closed again immediately and reported as a refusal. The session also ends by itself after 30s without an act and puts the page back after a reload. Read-only actions (audit/find/outline/info/errors) never change what the user is looking at; "peek" is the quick open-read-return shortcut.',
+      'Local visual acceptance tool for DSH plugin pages. Works as a session: "begin" opens the target panel and remembers the conversation it came from, "act" performs one step (click / waitFor / audit / snapshot / wait / type / key) and records it in a timeline, "run" executes an entire queue of steps in one call and answers with every step plus a summary, "end" returns that timeline and goes back to the conversation. A snapshot hands out refs ("e5"); target them with { ref: "e5" } when two controls share a label. Every step reports timing: totalMs, interactionMs (click → next frame), waitedMs (waitFor time-to-appear) and the long tasks it caused. Use waitFor to observe effects that arrive later, and interleave the plugin\'s own tools between acts to confirm the visual UI reflects them. OFF-LIMITS: settings, account, balance, recharge, and the account menu are never automated. Actions there are refused, and a click that opens the settings panel is closed again immediately and reported as a refusal. The session also ends by itself after 30s without an act and puts the page back after a reload. Read-only actions (audit/find/outline/info/errors) never change what the user is looking at; "peek" is the quick open-read-return shortcut.',
     parameters: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          enum: ['begin', 'act', 'end', 'peek', 'audit', 'find', 'outline', 'info', 'errors', 'restore-origin'],
+          enum: ['begin', 'act', 'run', 'end', 'peek', 'audit', 'find', 'outline', 'info', 'errors', 'restore-origin'],
           description: 'Session action (begin/act/end), quick check (peek), or read-only inspection.',
         },
         openText: {
@@ -556,6 +556,11 @@ export function apply(ctx) {
             },
             text: { type: 'string', description: 'Visible text target for click/waitFor/audit/type.' },
             selector: { type: 'string', description: 'CSS selector target for click/waitFor/audit/type.' },
+            ref: {
+              type: 'string',
+              description:
+                'Handle from a previous snapshot (for example "e5"). Prefer this over text/selector when two controls share a label; it is re-resolved against the live DOM, and an expired handle reports the failure instead of clicking the wrong element.',
+            },
             within: {
               type: 'string',
               description: 'CSS selector limiting a text search to one container (click/waitFor/audit/type), so chat text with the same wording cannot win.',
@@ -580,6 +585,39 @@ export function apply(ctx) {
           },
           required: ['kind'],
           additionalProperties: false,
+        },
+        steps: {
+          type: 'array',
+          description:
+            'Queue for action "run": each item is an act object, executed in order by the page half in one call. Prefer it when the whole checklist is already known — one round trip instead of one per step, and the result carries every step plus a summary.',
+          items: {
+            type: 'object',
+            properties: {
+              kind: { type: 'string', enum: ['click', 'waitFor', 'audit', 'snapshot', 'wait', 'type', 'key'] },
+              text: { type: 'string' },
+              selector: { type: 'string' },
+              ref: { type: 'string' },
+              within: { type: 'string' },
+              value: { type: 'string' },
+              key: { type: 'string' },
+              clear: { type: 'boolean' },
+              clickOnly: { type: 'boolean' },
+              ms: { type: 'number' },
+              settleMs: { type: 'number' },
+              timeoutMs: { type: 'number' },
+              limit: { type: 'integer' },
+            },
+            required: ['kind'],
+            additionalProperties: false,
+          },
+        },
+        stopOnFail: {
+          type: 'boolean',
+          description: 'For action "run": stop at the first failing step (default true). Set false to run the rest regardless.',
+        },
+        ref: {
+          type: 'string',
+          description: 'Handle from a snapshot (for example "e5"), used by audit/outline/peek instead of selector/text.',
         },
         selector: {
           type: 'string',
@@ -622,6 +660,11 @@ export function apply(ctx) {
         openSelector: args && typeof args.openSelector === 'string' ? args.openSelector : '',
         settleMs: args && Number.isFinite(args.settleMs) ? Math.max(0, Math.min(10000, args.settleMs)) : 300,
         act: args && args.act && typeof args.act === 'object' ? args.act : null,
+        // The queue for action "run": each entry is one act object. Capped so a
+        // runaway transcript cannot turn into an unbounded single request.
+        steps: Array.isArray(args && args.steps) ? args.steps.slice(0, 200) : null,
+        stopOnFail: !(args && args.stopOnFail === false),
+        ref: args && typeof args.ref === 'string' ? args.ref : '',
         agentSessionId: agentSessionId,
       };
       return await request(action, payload);

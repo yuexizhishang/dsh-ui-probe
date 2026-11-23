@@ -135,6 +135,10 @@ window.__ModuleLoader__.load({
     }
 
     function resolveTarget(args) {
+      if (args.ref) {
+        const byRef = lookupRef(String(args.ref));
+        return byRef ? [byRef] : [];
+      }
       if (args.selector) {
         try {
           return Array.from(document.querySelectorAll(args.selector));
@@ -168,6 +172,152 @@ window.__ModuleLoader__.load({
 
     function sleep(ms) {
       return new Promise(function (resolve) { setTimeout(resolve, ms); });
+    }
+
+    // ---- ref registry ------------------------------------------------------
+    // Two controls can share a visible label, so a snapshot also hands out
+    // stable handles (e1, e2 …) that later actions target directly. The registry
+    // is rebuilt on every snapshot and lazily when a handle stops resolving,
+    // because the DOM may have re-rendered in between.
+    const INTERACTIVE_SELECTOR = [
+      'button',
+      'a[href]',
+      'input',
+      'textarea',
+      'select',
+      'summary',
+      '[role="button"]',
+      '[role="link"]',
+      '[role="tab"]',
+      '[role="checkbox"]',
+      '[role="switch"]',
+      '[role="menuitem"]',
+      '[role="option"]',
+      '[contenteditable="true"]',
+      '[tabindex]:not([tabindex="-1"])',
+    ].join(',');
+    const MAX_REFS = 200;
+
+    let refMap = new Map();
+    let refByElement = new WeakMap();
+    let refsDirty = true;
+
+    function isRendered(element) {
+      if (!element || !element.isConnected) return false;
+      const rect = element.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return false;
+      return getComputedStyle(element).visibility !== 'hidden';
+    }
+
+    function refRole(element) {
+      const explicit = element.getAttribute('role');
+      if (explicit) return explicit;
+      const tag = element.tagName.toLowerCase();
+      if (tag === 'a') return 'link';
+      if (tag === 'button' || tag === 'summary') return 'button';
+      if (tag === 'select') return 'combobox';
+      if (tag === 'textarea') return 'textbox';
+      if (tag === 'input') {
+        const type = String(element.type || 'text').toLowerCase();
+        if (type === 'checkbox') return 'checkbox';
+        if (type === 'radio') return 'radio';
+        if (type === 'submit' || type === 'button') return 'button';
+        return 'textbox';
+      }
+      if (element.isContentEditable) return 'textbox';
+      return tag;
+    }
+
+    function refLabel(element) {
+      const text = textOf(element, 40);
+      if (text) return text;
+      return element.getAttribute('aria-label') || element.getAttribute('placeholder') ||
+        element.getAttribute('title') || '';
+    }
+
+    function rebuildRefs() {
+      refMap = new Map();
+      refByElement = new WeakMap();
+      let count = 0;
+      const all = document.querySelectorAll(INTERACTIVE_SELECTOR);
+      for (const element of all) {
+        if (count >= MAX_REFS) break;
+        if (!isRendered(element)) continue;
+        count += 1;
+        const ref = 'e' + count;
+        refMap.set(ref, element);
+        refByElement.set(element, ref);
+      }
+      refsDirty = false;
+    }
+
+    function ensureRefs() {
+      if (refsDirty) rebuildRefs();
+    }
+
+    function lookupRef(ref) {
+      ensureRefs();
+      const first = refMap.get(ref);
+      if (first && first.isConnected) return first;
+      rebuildRefs();
+      const second = refMap.get(ref);
+      return second && second.isConnected ? second : null;
+    }
+
+    function refItems(limit) {
+      ensureRefs();
+      const items = [];
+      for (const entry of refMap) {
+        if (items.length >= limit) break;
+        const element = entry[1];
+        if (!isRendered(element)) continue;
+        items.push({ ref: entry[0], role: refRole(element), text: refLabel(element) });
+      }
+      return items;
+    }
+
+    // ---- timing ------------------------------------------------------------
+    // Long tasks are recorded while the session runs, so a step reports the
+    // main-thread stalls it caused instead of only its wall time.
+    let longTasks = [];
+
+    function nextFrame() {
+      return new Promise(function (resolve) {
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () { resolve(); });
+        });
+      });
+    }
+
+    function round1(value) {
+      return Math.round(value * 10) / 10;
+    }
+
+    function longTasksSince(mark) {
+      return longTasks.slice(mark).map(function (entry) {
+        return { at: round1(entry.start), ms: round1(entry.duration) };
+      });
+    }
+
+    function stepTiming(result, elapsedMs, longTaskMark) {
+      const tasks = longTasksSince(longTaskMark);
+      return {
+        totalMs: elapsedMs,
+        interactionMs: result && typeof result.interactionMs === 'number' ? result.interactionMs : null,
+        waitedMs: result && typeof result.waitedMs === 'number' ? result.waitedMs : null,
+        longTasks: tasks,
+        longTaskMs: round1(tasks.reduce(function (sum, task) { return sum + task.ms; }, 0)),
+      };
+    }
+
+    // A stale handle is the one new failure mode refs introduce, so say what to
+    // do about it instead of a bare "target not found".
+    function targetError(args, what) {
+      if (args && args.ref) {
+        return what + ' target not found: ref "' + args.ref +
+          '" is not in the current snapshot; take a new snapshot and use one of its refs';
+      }
+      return what + ' target not found';
     }
 
     // The composer exists only while a conversation is on screen; that attribute
@@ -469,6 +619,7 @@ window.__ModuleLoader__.load({
     }
 
     function snapshot() {
+      rebuildRefs();
       const visible = function (element) { return element.offsetParent !== null; };
       return {
         title: document.title,
@@ -478,6 +629,9 @@ window.__ModuleLoader__.load({
           .map(function (b) { return textOf(b, 24) || b.getAttribute('aria-label') || ''; }).filter(Boolean),
         headings: Array.from(document.querySelectorAll('h1, h2, h3')).filter(visible).slice(0, 8)
           .map(function (h) { return textOf(h, 40); }).filter(Boolean),
+        // Handles for the controls above plus links, inputs and ARIA widgets;
+        // act { ref: "e5" } targets them without string matching.
+        refs: refItems(32),
       };
     }
 
@@ -646,13 +800,18 @@ window.__ModuleLoader__.load({
       if (!a || !a.kind) return { ok: false, error: 'act.kind is required' };
       if (a.kind === 'click') {
         const target = resolveTarget(a);
-        if (!target.length) return { ok: false, error: 'click target not found' };
+        if (!target.length) return { ok: false, error: targetError(a, 'click') };
         if (isOffLimits(target[0])) {
           return { ok: false, refused: 'off-limits', error: 'refused: settings, account, balance and recharge are off-limits to automation' };
         }
         const settingsWereOpen = settingsOpen();
         const menuWasOpen = accountMenuOpen();
         clickElement(target[0], a.clickOnly === true);
+        // Event handler → rendered frame: the number a user feels as "响应快不快".
+        const frameStart = performance.now();
+        await nextFrame();
+        const interactionMs = round1(performance.now() - frameStart);
+        refsDirty = true;
         await sleep(a.settleMs || DEFAULT_SETTLE);
         // Safety net: a click that opens the settings panel is treated as a refusal
         // and the panel is closed immediately, before anything can be read there.
@@ -679,12 +838,12 @@ window.__ModuleLoader__.load({
             snapshot: snapshot(),
           };
         }
-        return { ok: true, clicked: describe(target[0]), rect: rectOf(target[0]), snapshot: snapshot() };
+        return { ok: true, clicked: describe(target[0]), ref: refByElement.get(target[0]) || null, rect: rectOf(target[0]), interactionMs: interactionMs, snapshot: snapshot() };
       }
       if (a.kind === 'waitFor') return await waitForTarget(a);
       if (a.kind === 'audit') {
         const report = audit(resolveTarget(a));
-        return report.found === 0 ? { ok: false, error: 'audit target not found', report: report } : { ok: true, report: report };
+        return report.found === 0 ? { ok: false, error: targetError(a, 'audit'), report: report } : { ok: true, report: report };
       }
       if (a.kind === 'snapshot') return { ok: true, snapshot: snapshot() };
       if (a.kind === 'wait') {
@@ -694,12 +853,13 @@ window.__ModuleLoader__.load({
       }
       if (a.kind === 'type') {
         const target = resolveTarget(a);
-        if (!target.length) return { ok: false, error: 'type target not found' };
+        if (!target.length) return { ok: false, error: targetError(a, 'type') };
         if (isOffLimits(target[0])) {
           return { ok: false, refused: 'off-limits', error: 'refused: settings, account, balance and recharge are off-limits to automation' };
         }
         const result = await typeInto(target[0], a.value, { clear: a.clear !== false, settleMs: a.settleMs });
-        return Object.assign({}, result, { snapshot: snapshot() });
+        refsDirty = true;
+        return Object.assign({}, result, { ref: refByElement.get(target[0]) || null, snapshot: snapshot() });
       }
       if (a.kind === 'key') {
         const target = resolveTarget(a);
@@ -711,10 +871,12 @@ window.__ModuleLoader__.load({
         const key = String(a.value || a.key || '');
         if (!key) return { ok: false, error: 'key is required (for example "Enter", "Escape", "Backspace")' };
         pressKey(element, key);
+        refsDirty = true;
         await sleep(a.settleMs || DEFAULT_SETTLE);
         return {
           ok: true,
           node: describe(element),
+          ref: refByElement.get(element) || null,
           key: key,
           note: 'synthetic key events do not insert text; use type for text and key for shortcuts/submits',
           snapshot: snapshot(),
@@ -744,6 +906,27 @@ window.__ModuleLoader__.load({
         };
         window.addEventListener('error', onError);
         window.addEventListener('unhandledrejection', onRejection);
+
+        // Long tasks are sampled for the timing block; the observer belongs to
+        // this plugin, so it is disconnected with the plugin.
+        ctx.effect(function () {
+          if (typeof PerformanceObserver !== 'function') return undefined;
+          let observer = null;
+          try {
+            observer = new PerformanceObserver(function (list) {
+              for (const entry of list.getEntries()) {
+                longTasks.push({ start: entry.startTime, duration: entry.duration });
+              }
+              if (longTasks.length > 60) longTasks = longTasks.slice(-60);
+            });
+            observer.observe({ type: 'longtask' });
+          } catch (error) {
+            return undefined;
+          }
+          return function () {
+            try { observer.disconnect(); } catch (error) { /* already disconnected */ }
+          };
+        }, 'ui-probe: long tasks');
 
         // A reload during a session (or a crash of the previous page) is put back
         // on the first attach, without waiting for a tool call.
@@ -795,17 +978,69 @@ window.__ModuleLoader__.load({
           if (pending.action === 'act') {
             if (!session) return { ok: false, error: 'no open verification session; call begin first' };
             const started = Date.now();
+            const longTaskMark = longTasks.length;
             const result = await runAct(args.act || {});
+            const elapsed = Date.now() - started;
             const step = {
               n: session.steps.length + 1,
               kind: (args.act && args.act.kind) || '(none)',
               at: started,
-              elapsedMs: Date.now() - started,
+              elapsedMs: elapsed,
+              timing: stepTiming(result, elapsed, longTaskMark),
               result: result,
             };
             session.steps.push(step);
             touchIdle(finishSession);
             return { ok: true, value: { step: step, sessionSteps: session.steps.length, origin: session.origin } };
+          }
+          if (pending.action === 'run') {
+            // The conversation hands over the whole checklist once; the client
+            // runs it as a queue and answers with every step plus one summary.
+            if (!session) return { ok: false, error: 'no open verification session; call begin first' };
+            const queue = Array.isArray(args.steps) ? args.steps : [];
+            if (!queue.length) return { ok: false, error: 'steps is required: an array of act objects' };
+            const stopOnFail = args.stopOnFail !== false;
+            const queueStarted = Date.now();
+            const executed = [];
+            let failed = 0;
+            let lastError = null;
+            for (let index = 0; index < queue.length; index += 1) {
+              const spec = queue[index] || {};
+              const started = Date.now();
+              const longTaskMark = longTasks.length;
+              const result = await runAct(spec);
+              const elapsed = Date.now() - started;
+              const step = {
+                n: session.steps.length + 1,
+                kind: spec.kind || '(none)',
+                at: started,
+                elapsedMs: elapsed,
+                timing: stepTiming(result, elapsed, longTaskMark),
+                result: result,
+              };
+              session.steps.push(step);
+              executed.push(step);
+              if (!result || result.ok === false) {
+                failed += 1;
+                lastError = (result && result.error) || 'step failed';
+                if (stopOnFail) break;
+              }
+            }
+            touchIdle(finishSession);
+            return {
+              ok: true,
+              value: {
+                steps: executed,
+                requested: queue.length,
+                executed: executed.length,
+                failed: failed,
+                stoppedEarly: executed.length < queue.length,
+                lastError: lastError,
+                elapsedMs: Date.now() - queueStarted,
+                sessionSteps: session.steps.length,
+                origin: session.origin,
+              },
+            };
           }
           if (pending.action === 'end') {
             return { ok: true, value: await finishSession({ auto: false, reason: 'explicit end' }) };
