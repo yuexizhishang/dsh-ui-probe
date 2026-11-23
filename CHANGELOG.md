@@ -6,6 +6,16 @@
 
 ## 1.1.0 — 2026-11-23
 
+### 发布方式 — 改用 GitHub Actions 可信发布（2026-11-23）
+
+状态：工作流已加入仓库；npm 侧登记可信发布者后生效。
+
+**问题**：npm 在本机发布需要 2FA 验证码；勾「Bypass 2FA」生成的 token 会在 2027 年 1 月被统一吊销（连读与暂存一起失效），不是长期方案。
+
+**改动**：新增 `.github/workflows/publish.yml`——推送 `v*` 标签（或手动 dispatch）时，在 GitHub Actions 里跑 `npm run check` 后执行 `npm publish --access public`。通过 **Trusted Publishing（OIDC）**取得几分钟内失效的发布凭据：无长期 token、无验证码、自动附带 provenance；标签与 `package.json` 版本不一致时直接失败。
+
+**生效前提**：npm 包页面的 Trusted Publisher 需登记 `GitHub Actions / yuexizhishang / dsh-ui-probe / publish.yml`。
+
 ### 更新记录校对与 peek ref 修复（2026-11-23）
 
 状态：完成；`peek` 的 ref 支持已实测。

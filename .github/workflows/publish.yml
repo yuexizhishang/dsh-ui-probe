@@ -1,0 +1,42 @@
+name: publish
+
+# Publish to npm with Trusted Publishing: GitHub issues a short-lived OIDC
+# credential for this workflow, npm exchanges it for a publish permission that
+# expires in minutes. No npm token, no 2FA code, nothing to leak.
+#
+# Prerequisite: on npmjs.com the package must list a trusted publisher with
+#   provider  = GitHub Actions
+#   owner     = yuexizhishang
+#   repository = dsh-ui-probe
+#   workflow  = publish.yml
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Tag must match package.json version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          node -e "const v = require('./package.json').version; const tag = process.env.GITHUB_REF_NAME; if (tag !== 'v' + v) { console.error('tag ' + tag + ' does not match package version v' + v); process.exit(1); }"
+
+      - name: Repository self-check
+        run: npm run check
+
+      - name: Publish
+        run: npm publish --access public
